@@ -28,8 +28,10 @@ import { qwikVite } from '@builder.io/qwik/optimizer'
 
 // csr: true = client-side-rendered SPA (no SSR). Without it qwikVite runs in SSR
 // mode and demands a src/root.tsx server entry ("Qwik input src/root not found").
+// imageDevTools: false = the image-size overlay is only injected into SSR pages,
+// so a CSR app never uses the dev-server middleware behind it.
 export default defineConfig({
-  plugins: [qwikVite({ csr: true })],
+  plugins: [qwikVite({ csr: true, devTools: { imageDevTools: false } })],
 })
 `,
     "index.html": `<!doctype html>

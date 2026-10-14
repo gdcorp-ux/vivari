@@ -7988,6 +7988,14 @@ Presentation slides for developers — running in the browser
 // its service in-process (see packages/studio/src/workers/fetcher-worker.js +
 // packages/runtime/esbuild-inproc-patch.js), and qwikVite runs in `csr: true` mode
 // so it doesn't demand an SSR src/root.tsx entry.
+//
+// It also turns off `devTools.imageDevTools`. The loader resolves every package
+// with the "require" condition, ESM importers included, so vite.config.ts gets
+// optimizer.cjs where Node would hand it optimizer.mjs. In the CJS build
+// `sys.dynamicImport` is a plain require(), and from 1.20.2 the image-size
+// middleware calls `.then` on its result, so `vite` dies before it listens. The
+// overlay that middleware serves is only injected into SSR pages, so a CSR app
+// loses nothing by not mounting it.
 // ═══════════════════════════════════════════════════════════════════════════
 
 // ── Preact ───────────────────────────────────────────────────────────────────
@@ -8295,8 +8303,10 @@ import { qwikVite } from '@builder.io/qwik/optimizer'
 
 // csr: true = client-side-rendered SPA (no SSR). Without it qwikVite runs in SSR
 // mode and demands a src/root.tsx server entry ("Qwik input src/root not found").
+// imageDevTools: false = the image-size overlay is only injected into SSR pages,
+// so a CSR app never uses the dev-server middleware behind it.
 export default defineConfig({
-  plugins: [qwikVite({ csr: true })],
+  plugins: [qwikVite({ csr: true, devTools: { imageDevTools: false } })],
 })
 `,
       "index.html": `<!doctype html>

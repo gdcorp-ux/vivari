@@ -389,11 +389,25 @@ if (process.env.VV_SPIKE_CASE) {
     py.FS.chdir(DIR);
     py.runPython(`import sys\nif ${JSON.stringify(DIR)} not in sys.path: sys.path.insert(0, ${JSON.stringify(DIR)})`);
   };
+  // The studio's lock carries the PyPI wheels vendor-pyodide.mjs injects at their
+  // PINNED versions; this tier's lock does not, so those names fall through to
+  // micropip. Unpinned, micropip takes whatever PyPI published last, which is not
+  // what the browser gets: black 26.10 lowercased "Cannot parse" and the
+  // language-service case compared it against the host oracle's pinned 26.5.1.
+  // The constraints hold the vendored packages' own dependencies (black's
+  // pytokens, pathspec, mypy-extensions) to the shipped versions as well.
+  const PYPI_PINS = vendoredPyPIPins(path.join(ROOT, "scripts/vendor-pyodide.mjs"));
+  const pinned = (n) => {
+    const p = PYPI_PINS.find((x) => x.name === n);
+    return p ? `${p.name}==${p.version}` : n;
+  };
   const ensure = async (names) => {
     if (!names?.length) return;
     try { await py.loadPackage(names, { messageCallback: () => {} }); return; } catch { /* not all are in the lock */ }
     await py.loadPackage("micropip", { messageCallback: () => {} });
-    await py.pyimport("micropip").install(names);
+    await py.pyimport("micropip").install.callKwargs(py.toPy(names.map(pinned)), {
+      constraints: py.toPy(PYPI_PINS.map((p) => `${p.name}==${p.version}`)),
+    });
   };
   const dump = () => { if (out.length) console.log(out.join("").split("\n").slice(-25).map((l) => "      | " + l).join("\n")); };
 
@@ -1501,6 +1515,11 @@ r
       ok(
         versions.jedi === jediVersion,
         `the oracle ran jedi ${versions.jedi} against the browser's ${jediVersion}`,
+      );
+      const pyBlack = py.runPython("import black; black.__version__");
+      ok(
+        versions.black === pyBlack,
+        `the oracle ran black ${versions.black} against the browser's ${pyBlack}`,
       );
       // Worth stating in the output: the ONE thing the two sides do not share,
       // and the reason the stdlib comparisons above are presence checks.
