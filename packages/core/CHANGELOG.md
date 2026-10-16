@@ -3,6 +3,12 @@
 From 1.1.0 on, entries are generated from [changesets](https://github.com/changesets/changesets).
 `@vivari/core` and `@vivari/react` are released together under the same version.
 
+## 1.1.2
+
+### Patch Changes
+
+- [`b15a8f4`](https://github.com/maitrungduc1410/vivari/commit/b15a8f40deb02133d8bd87203fbab5d674bdbfa1) Thanks [@maitrungduc1410](https://github.com/maitrungduc1410)! - Guard `@npmcli/arborist`'s `#loadPeerSet` against a peer node that gets replaced and detached in its virtual `peerSet` mid-iteration (triggered by `@angular/build` → `vitest@4.1.12` → `@vitest/browser-webdriverio@4.1.11`), preventing `TypeError: Cannot read properties of null (reading 'edgesOut')` during `npm install`.
+
 ## 1.1.1
 
 ### Patch Changes
