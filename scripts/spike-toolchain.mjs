@@ -22,6 +22,11 @@ import {
   NATIVE_DROPIN_ALIASES,
   synthesizeRemappedPackument,
 } from "../packages/runtime/toolchain-shims.js";
+import {
+  ARBORIST_BUILD_IDEAL_TREE,
+  patchArboristPeerSet,
+  stubNodeGyp,
+} from "../packages/kernel-host/node-gyp-stub.js";
 
 let failures = 0;
 const ok = (cond, msg) => {
@@ -187,6 +192,86 @@ ok(!!v6 && v6.main === "index.js" && v6.type === "module", "remap: carries the t
 // Guard: unusable inputs yield null (fetcher then falls back to the plain fetch).
 ok(synthesizeRemappedPackument(null, bcryptjsPack, "bcrypt") === null, "remap: null source -> null");
 ok(synthesizeRemappedPackument(bcryptPack, { name: "bcryptjs" }, "bcrypt") === null, "remap: target without versions -> null");
+
+// --- 7. @npmcli/arborist #loadPeerSet detach guard ---------------------------
+const ARBORIST_SNIPPET = `class BuildIdealTree {
+  constructor(visit) { this.visit = visit }
+  #failPeerConflict() {}
+  run(node) { return this.#loadPeerSet(node, new Set()) }
+  async #loadPeerSet (node, required) {
+    const peerEdges = [...node.edgesOut.values()]
+    for (const edge of peerEdges) {
+      const parentEdge = node.parent.edgesOut.get(edge.name)
+      await this.visit(edge, parentEdge)
+      // ok, it's the root, or we're in unforced strict mode, so this is bad
+      this.#failPeerConflict(edge, parentEdge)
+    }
+    return node
+  }
+}`;
+
+const patchedArborist = patchArboristPeerSet(ARBORIST_SNIPPET);
+ok(patchedArborist != null, "arborist: patchArboristPeerSet rewrites #loadPeerSet");
+ok(
+  patchArboristPeerSet(ARBORIST_SNIPPET.replace(/\n/g, "\r\n")) === patchedArborist,
+  "arborist: CRLF source normalizes and patches identically",
+);
+
+let arboristWarned = false;
+const origArboristWarn = console.warn;
+console.warn = (...a) => {
+  if (String(a[0]).includes("#loadPeerSet patch did NOT apply")) arboristWarned = true;
+};
+ok(patchArboristPeerSet(patchedArborist) === null, "arborist: already-patched source is a no-op");
+ok(!arboristWarned, "arborist: already-patched source does not warn");
+ok(patchArboristPeerSet("class Other {}") === null, "arborist: drifted/unrelated source returns null");
+ok(arboristWarned, "arborist: drifted/unrelated source warns loudly");
+console.warn = origArboristWarn;
+
+// Simulate a recursive #loadPeerSet call detaching `node` on the first edge
+// and replacing it in `peerSet` before the second edge is visited.
+const PeerSetHarness = new Function(`${patchedArborist}; return BuildIdealTree;`)();
+const peerSetRoot = {
+  edgesOut: new Map([["@vitest/browser-webdriverio", {}], ["@vitest/coverage-istanbul", {}]]),
+  children: new Map(),
+};
+const initialNode = {
+  name: "vitest",
+  version: "4.1.12",
+  parent: peerSetRoot,
+  edgesOut: new Map([
+    ["@vitest/browser-webdriverio", { name: "@vitest/browser-webdriverio" }],
+    ["@vitest/coverage-istanbul", { name: "@vitest/coverage-istanbul" }],
+  ]),
+};
+const replacementNode = { name: "vitest", version: "4.1.11", parent: peerSetRoot };
+peerSetRoot.children.set("vitest", initialNode);
+
+const visited = [];
+const settled = await new PeerSetHarness((edge) => {
+  visited.push(edge.name);
+  if (edge.name === "@vitest/browser-webdriverio") {
+    // Recursive peer resolution replaces vitest@4.1.12 with vitest@4.1.11 in peerSetRoot.
+    initialNode.parent = null;
+    peerSetRoot.children.set("vitest", replacementNode);
+  }
+}).run(initialNode);
+
+ok(settled === replacementNode, "arborist: detached peer node settles to its replacement in peerSet");
+ok(visited.length === 1 && visited[0] === "@vitest/browser-webdriverio", "arborist: stops iterating stale peer edges once detached");
+
+// Check that stubNodeGyp applies the patch in a mock VFS kernel.
+const vfsMap = new Map([["/npm" + ARBORIST_BUILD_IDEAL_TREE, ARBORIST_SNIPPET]]);
+const mockKernel = {
+  exists: (p) => vfsMap.has(p),
+  readFile: (p) => vfsMap.get(p),
+  writeFile: (p, c) => vfsMap.set(p, c),
+};
+stubNodeGyp(mockKernel, "/npm");
+ok(
+  vfsMap.get("/npm" + ARBORIST_BUILD_IDEAL_TREE) === patchedArborist,
+  "arborist: stubNodeGyp patches build-ideal-tree.js in the VFS",
+);
 
 console.log("\nRESULT: " + (failures === 0 ? "PASS — toolchain subsystem intact" : `FAIL — ${failures} check(s) failed`));
 process.exit(failures === 0 ? 0 : 1);

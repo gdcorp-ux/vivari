@@ -93,8 +93,9 @@ export async function loadRealNpm(kernel, packBytes) {
  */
 export async function ensureRealNpm(kernel, fetchPackBytes) {
   if (hasRealNpm(kernel)) {
+    const stubbed = stubNodeGyp(kernel, NPM_VFS_ROOT);
     applyRealNpmShims(kernel);
-    return { version: null, fileCount: 0, nodeGypStubbed: 0, restored: true };
+    return { version: null, fileCount: 0, nodeGypStubbed: stubbed.length, restored: true };
   }
   const packBytes = await fetchPackBytes();
   if (!packBytes) return null;

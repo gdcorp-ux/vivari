@@ -1970,7 +1970,12 @@ no-op: `stubNodeGyp(kernel, npmRoot)` overwrites npm's node-gyp entry points in
 the vendored tree with a JS stub (exit 0, warns), and a `node-gyp` coreutil is
 the PATH fallback. Native compilation is skipped; the package's JS or
 `wasm32-wasi` build is what actually loads. Don't "fix" a node-gyp failure by
-trying to compile — that path is intentionally stubbed.
+trying to compile — that path is intentionally stubbed. `stubNodeGyp` (plus
+`scripts/vendor-npm.mjs` at pack time and `ARBORIST_PEERSET_PRELOAD` in
+`scripts/gen-template-locks.mjs`) also applies `patchArboristPeerSet` to
+`@npmcli/arborist/lib/arborist/build-ideal-tree.js`, guarding `#loadPeerSet`
+when a recursive peer-set resolution replaces and detaches the current peer node
+mid-loop (e.g. `@angular/build` → `vitest`).
 
 If a `.node` file is nevertheless `require()`d — a prebuilt binary that shipped in
 the tarball, which is the usual case for `bcrypt`/`sharp`/`better-sqlite3` — the

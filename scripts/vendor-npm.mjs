@@ -24,6 +24,11 @@ import fs from "node:fs";
 import path from "node:path";
 import zlib from "node:zlib";
 import { fileURLToPath } from "node:url";
+import {
+  ARBORIST_BUILD_IDEAL_TREE,
+  ARBORIST_PEERSET_MARKER,
+  patchArboristPeerSet,
+} from "../packages/kernel-host/node-gyp-stub.js";
 
 const NPM_VERSION = "10.9.2"; // keep in sync with scripts/spike-npm.mjs
 const ROOT = path.resolve(fileURLToPath(new URL("../", import.meta.url)));
@@ -43,9 +48,20 @@ function log(msg) {
   process.stderr.write(`[vendor-npm] ${msg}\n`);
 }
 
+function packHasArboristGuard(file) {
+  try {
+    return zlib.gunzipSync(fs.readFileSync(file)).includes(ARBORIST_PEERSET_MARKER);
+  } catch {
+    return false;
+  }
+}
+
 if (fs.existsSync(OUT_FILE) && !force) {
-  log(`asset already present: ${path.relative(ROOT, OUT_FILE)} (use --force to rebuild)`);
-  process.exit(0);
+  if (packHasArboristGuard(OUT_FILE)) {
+    log(`asset already present: ${path.relative(ROOT, OUT_FILE)} (use --force to rebuild)`);
+    process.exit(0);
+  }
+  log(`existing ${path.relative(ROOT, OUT_FILE)} predates #loadPeerSet guard — rebuilding …`);
 }
 
 // 1) Vendor a pinned npm into a scratch dir (host npm/network needed once).
@@ -69,6 +85,23 @@ if (!fs.existsSync(path.join(VENDOR_NPM, "bin", "npm-cli.js")) || force) {
 if (!fs.existsSync(path.join(VENDOR_NPM, "bin", "npm-cli.js"))) {
   log(`vendored npm is missing bin/npm-cli.js — aborting`);
   process.exit(1);
+}
+
+const arboristTreeFile = path.join(VENDOR_NPM, ARBORIST_BUILD_IDEAL_TREE);
+if (!fs.existsSync(arboristTreeFile)) {
+  log(`vendored npm is missing ${ARBORIST_BUILD_IDEAL_TREE} — aborting`);
+  process.exit(1);
+}
+{
+  const src = fs.readFileSync(arboristTreeFile, "utf8");
+  const patched = patchArboristPeerSet(src);
+  if (patched) {
+    fs.writeFileSync(arboristTreeFile, patched, "utf8");
+    log(`patched ${ARBORIST_BUILD_IDEAL_TREE} (#loadPeerSet detach guard)`);
+  } else if (!src.includes(ARBORIST_PEERSET_MARKER)) {
+    log(`FAILED to patch ${ARBORIST_BUILD_IDEAL_TREE} — block shape changed`);
+    process.exit(1);
+  }
 }
 
 // 2) Walk the tree into a flat file list (files only; npm ships no symlinks in

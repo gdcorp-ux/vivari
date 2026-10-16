@@ -50,6 +50,7 @@ import { promisify } from "node:util";
 const execFileP = promisify(execFile);
 
 import { loadShippedTemplates } from "./lib/shipped-templates.mjs";
+import { ARBORIST_PEERSET_PRELOAD } from "../packages/kernel-host/node-gyp-stub.js";
 import { NATIVE_DROPIN_ALIASES, NATIVE_WASM_ALIASES } from "../packages/runtime/toolchain-shims.js";
 
 // Driven by the kernel's own alias tables rather than a copy of them, so a
@@ -749,7 +750,9 @@ export function aliasOverrides(lockText) {
  */
 async function resolveLock(id, packageJson) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), `vv-lock-${id}-`));
+  const preload = path.join(os.tmpdir(), `vv-arborist-preload-${process.pid}-${id}.cjs`);
   const lock = path.join(dir, "package-lock.json");
+  const nodeOptions = `${process.env.NODE_OPTIONS || ""} --require ${JSON.stringify(preload)}`.trim();
   const resolve = () =>
     execFileP(
       "npm",
@@ -765,9 +768,10 @@ async function resolveLock(id, packageJson) {
         "--cache",
         CACHE,
       ],
-      { cwd: dir, encoding: "utf8" },
+      { cwd: dir, encoding: "utf8", env: { ...process.env, NODE_OPTIONS: nodeOptions } },
     );
   try {
+    fs.writeFileSync(preload, ARBORIST_PEERSET_PRELOAD);
     fs.writeFileSync(path.join(dir, "package.json"), packageJson);
     await resolve();
     if (!fs.existsSync(lock)) throw new Error("npm wrote no package-lock.json");
@@ -801,6 +805,7 @@ async function resolveLock(id, packageJson) {
     assertPeerProviders(text);
     return text;
   } finally {
+    fs.rmSync(preload, { force: true });
     fs.rmSync(dir, { recursive: true, force: true });
   }
 }
