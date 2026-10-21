@@ -12,10 +12,10 @@
 // Bun's dir/file/path/env/main/resolveSync when the Bun global is installed —
 // see importMetaSource). Named/default/namespace
 // interop with CJS uses the standard __esModule rules. Live bindings are modeled
-// with getters. Top-level await is supported for the ENTRY module (module.js
-// recompiles a TLA body as an AsyncFunction and run() awaits it while driving the
-// loop); a non-entry module `require()`d synchronously still can't block on its
-// TLA. Known casualty: exact circular-eval ordering.
+// with getters. Top-level await is supported for the entry and for dynamic
+// import targets (module.js tracks the AsyncFunction evaluation promise).
+// A module `require()`d synchronously still can't block on its TLA. Known
+// casualty: exact circular-eval ordering.
 
 import { parse } from "./node/vendor/es-module-lexer.js";
 
@@ -167,7 +167,7 @@ function helpers(fileUrl, filename) {
     // (analyzeImportedModDifference) and threw "Named export 'default' not found. The
     // requested module 'cssesc' is a CommonJS module…" on astro. __oc_ns is a no-op for
     // an ESM target (already __esModule) and synthesizes the namespace for CJS.
-    "const __oc_import=function(s){return Promise.resolve().then(function(){return __oc_ns(__oc_require(s));});};" +
+    "const __oc_import=function(s){return Promise.resolve().then(function(){return __oc_require.__oc_import?__oc_require.__oc_import(s):{exports:__oc_require(s)};}).then(function(m){return __oc_ns(m.exports);});};" +
     importMetaSource(fileUrl, filename)
   );
 }
@@ -445,8 +445,8 @@ export function rewriteCjsDynamicImport(source, filename) {
   // Emscripten glue does `const { createRequire } = await import('module')`; keying only
   // objects dropped it, surfacing as a minified "e is not a function" in PGlite.create().
   const head =
-    "const __oc_import=function(s){return Promise.resolve().then(function(){" +
-    "var m=require(s);if(m&&m.__esModule)return m;" +
+    "const __oc_import=function(s){return Promise.resolve().then(function(){return require.__oc_import?require.__oc_import(s):{exports:require(s)};}).then(function(box){var m=box.exports;" +
+    "if(m&&m.__esModule)return m;" +
     "var ns=Object.create(null);if(m&&(typeof m==='object'||typeof m==='function'))for(var k of Object.keys(m))ns[k]=m[k];ns.default=m;return ns;" +
     "});};";
   return head + applyEdits(source, edits);

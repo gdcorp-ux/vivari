@@ -439,6 +439,22 @@ export function createModuleSystem({ fs, path, builtins, process, globals, nodeM
     // required from each given dir, in order (used by @nestjs/cli to find the
     // project's typescript). Falls back to this module's own dir.
     require.resolve = (request, options) => Module._resolveFilename(request, parent, false, options);
+    // Private seam for rewritten import(): require stays synchronous, but import
+    // must not expose half-initialized exports from a top-level-await module.
+    // Config loaders otherwise see an empty config and silently skip plugins.
+    require.__oc_import = async (request) => {
+      let value = require(request);
+      let target;
+      try { target = cache[require.resolve(request)]; } catch { /* virtual loader-hook module */ }
+      // Respect Module._load replacements, including hooks for modules with no
+      // physical filename. Only the value from the cached module can be pending.
+      if (target && target.exports === value && target.evaluating) {
+        await target.evaluating;
+        value = target.exports;
+      }
+      // Box exports so the async return cannot assimilate a CJS Promise export.
+      return { exports: value };
+    };
     require.cache = cache;
     // Live view of the entry module: it's set during runMain AFTER the entry
     // begins compiling, so a static snapshot here would read undefined for the

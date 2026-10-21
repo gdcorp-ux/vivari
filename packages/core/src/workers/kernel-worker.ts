@@ -3180,6 +3180,10 @@ self.onmessage = async (event) => {
 
   // A preview request relayed from the main thread. The Service Worker's reply
   // port was transferred to us, so we answer it directly.
+  if (m.type === "vv-preview-port") {
+    event.ports[0]?.postMessage(!!kernel?.listeners.has(m.port));
+    return;
+  }
   if (m.type === "vv-http") {
     const port = event.ports[0];
     if (!kernel) {

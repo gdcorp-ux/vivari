@@ -4192,6 +4192,12 @@ subtly wrong, and were:
   output that otherwise looks normal.
 
 ### A loop that runs dry is an event, not just an exit
+**The `exit` event can still change the final status synchronously.** npm's
+unfinished-install guard sets `process.exitCode` inside an exit listener. Sample
+the status after the listeners run; an explicit nested `process.exit(n)` wins,
+and an exception in an exit listener fails the process. `spike-node-cli` compares
+these cases with real Node, including natural exit and explicit exit overrides.
+
 Two things Node does when the loop empties that we did not:
 - **`beforeExit` is emitted, and a listener may schedule more work** — that is the
   whole point of it (a pool draining its last jobs, a logger flushing). So the loop
@@ -4429,6 +4435,18 @@ this is about the in-VM TCP table only. `dns.lookup`'s `127.0.0.1` behaviour is
 also unchanged.
 
 ### ESM ↔ CJS interop
+**Dynamic import waits for the target's evaluation.** `require.__oc_import` is the
+private async seam used by both ESM and CJS import rewrites; it awaits the cached
+module's `evaluating` promise before returning boxed exports. Boxing preserves a
+Promise-valued CJS export without assimilating it. Call `Module._load` before
+looking for cached evaluation so virtual/replacement loader hooks still win.
+A synchronous `require`
+still cannot block on top-level await. Config loaders such as PostCSS dynamically
+import a project config that may itself await a plugin: returning the namespace
+early looks like an empty config and silently leaves CSS untransformed. The
+offline `spike-node-cli` covers delayed evaluation and rejection; the network
+`spike-postcss-config` drives real Vite 6 with `.mjs`, `.js`, and `.cjs` configs.
+
 `esm.js` transpiles ESM to our sync CJS. Two traps already handled — respect them:
 - Generated identifiers are namespaced `__oc_*` (`__oc_exports`, `__oc_module`,
   `__oc_require`, …) so user code declaring `module`/`exports`/`require` doesn't
@@ -5487,6 +5505,14 @@ cost multiple sessions:
    thing you just added — `unsupported digest 'blake2b256'`, with a Wasm stack — which
    reads like a code bug and is not one. Suspect the artifact before the source
    whenever the browser alone rejects a capability the Node tier exercises happily.
+
+**Packaging the SDK:** use `npm run build:sdk:release` before `npm pack`. This
+rebuilds all three browser Wasm crates with wasm-pack's default release profile
+(including wasm-opt), builds both SDKs, and runs smoke; `release.yml` uses the
+same command. `build:core` alone reuses whatever is in `pkg/`, including slow,
+oversized `--dev` artifacts. A development-profile tarball is not representative
+of published-package performance. wasm-pack manages wasm-opt itself; it need not
+be installed on PATH.
 
 - `npm run verify` — `scripts/verify-node.mjs`, headless end-to-end (fs, process,
   shell, http, timers, watch, worker_threads incl. `receiveMessageOnPort`). **Run

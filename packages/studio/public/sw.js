@@ -11,6 +11,38 @@
 
 const PREVIEW_MARKER = "/preview/";
 
+// Only the proxy prefix at the registration's scope root is special. A guest
+// source path such as /src/components/preview/Thing.tsx belongs to its client.
+function previewRoute(pathname) {
+  const scope = new URL(self.registration.scope).pathname;
+  const prefix = scope.replace(/\/$/, "") + PREVIEW_MARKER;
+  if (!pathname.startsWith(prefix)) return null;
+  const m = pathname.slice(prefix.length).match(/^(\d+)(\/.*)?$/);
+  if (!m) return null;
+  const port = Number(m[1]);
+  return port > 0 && port <= 65535 ? { port, path: m[2] || "/", prefix: prefix + m[1] } : null;
+}
+
+// Ask the live kernel rather than keeping a second (possibly stale after SW
+// eviction or process exit) port registry. Both preview transports relay this
+// query just like HTTP; it does not send a request to the guest server.
+async function hasPreviewServer(port) {
+  const sink = await resolveKernelSink();
+  if (!sink) return null;
+  return new Promise((resolve) => {
+    const mc = new MessageChannel();
+    const done = (live) => {
+      clearTimeout(timer);
+      mc.port1.close();
+      resolve(live);
+    };
+    const timer = setTimeout(() => done(null), 2000);
+    mc.port1.onmessage = (event) => done(event.data === true);
+    try { sink.post({ type: "vv-preview-port", port }, [mc.port2]); }
+    catch { done(null); }
+  });
+}
+
 // Mode C (wildcard per-port origin): when this SW is served on a preview host
 // like `<token>--<port>.<domain>` the target port is encoded in the HOSTNAME (one
 // origin per port), not in a `/preview/<port>/` PATH. An optional `-<tag>` may
@@ -1075,10 +1107,14 @@ self.addEventListener("fetch", (event) => {
   // exactly as before — the kernel is shared across every origin's bridge port.
   if (WILDCARD_MODE) {
     if (url.pathname.startsWith("/vv-devtools/")) return;
-    const cross = url.pathname.match(/^\/preview\/(\d+)(\/.*)?$/);
+    const cross = previewRoute(url.pathname);
     if (cross) {
       event.respondWith(
-        handlePreview(event, parseInt(cross[1], 10), (cross[2] || "/") + url.search, false),
+        hasPreviewServer(cross.port).then((live) =>
+          live !== false
+            ? handlePreview(event, cross.port, cross.path + url.search, false)
+            : handlePreview(event, WILDCARD_PORT, url.pathname + url.search, false),
+        ),
       );
     } else {
       event.respondWith(handlePreview(event, WILDCARD_PORT, url.pathname + url.search, false));
@@ -1086,21 +1122,21 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
-  const idx = url.pathname.indexOf(PREVIEW_MARKER);
-  if (idx !== -1) {
+  const route = previewRoute(url.pathname);
+  if (route) {
     // Explicit preview URL: <scope>/preview/<port>/<path> — the iframe navigation
     // and any *relative* subresource resolve here.
-    const rest = url.pathname.slice(idx + PREVIEW_MARKER.length);
-    const slash = rest.indexOf("/");
-    const port = parseInt(slash === -1 ? rest : rest.slice(0, slash), 10);
-    const stripped = (slash === -1 ? "/" : rest.slice(slash)) + url.search;
+    const port = route.port;
+    const stripped = route.path + url.search;
     const full = url.pathname + url.search;
     // Keep-prefix ports serve UNDER /preview/<port>/ (see loadKeepPrefixPorts);
     // everyone else gets the prefix stripped as before.
     event.respondWith(
-      loadKeepPrefixPorts().then((keep) =>
-        handlePreview(event, port, keep.has(port) ? full : stripped, keep.has(port)),
-      ),
+      hasPreviewServer(port).then(async (live) => {
+        if (live === false) return routeByClient(event, url);
+        const keep = await loadKeepPrefixPorts();
+        return handlePreview(event, port, keep.has(port) ? full : stripped, keep.has(port));
+      }),
     );
     return;
   }
@@ -1244,9 +1280,10 @@ async function routeByClient(event, url) {
     const client = await self.clients.get(id);
     if (client) clientUrl = client.url;
   }
-  const m = clientUrl.match(/\/preview\/(\d+)\//);
-  if (!m) return passThrough(event, url);
-  return handlePreview(event, parseInt(m[1], 10), url.pathname + url.search);
+  let route;
+  try { route = previewRoute(new URL(clientUrl).pathname); } catch { /* no client */ }
+  if (!route) return passThrough(event, url);
+  return handlePreview(event, route.port, url.pathname + url.search);
 }
 
 // True when a referrer is a same-origin URL that is NOT a preview page. Lets the
@@ -1448,9 +1485,9 @@ async function servePreview(event, port, path, keepPrefix, served = {}) {
   // served at the origin root with no prefix (its source URL has no /preview/).
   if (!keepPrefix) {
     const srcPath = new URL(event.request.url).pathname;
-    const pIdx = srcPath.indexOf(PREVIEW_MARKER);
-    if (pIdx !== -1) {
-      headers["x-forwarded-prefix"] = srcPath.slice(0, pIdx) + PREVIEW_MARKER + port;
+    const route = previewRoute(srcPath);
+    if (route && route.port === port) {
+      headers["x-forwarded-prefix"] = route.prefix;
     }
   }
 

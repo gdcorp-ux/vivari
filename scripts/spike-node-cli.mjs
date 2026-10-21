@@ -86,6 +86,30 @@ process.exit();
 `,
   "exit-bare-unset.js": `process.exit();
 `,
+  "exit-listener-code.js": `process.on('exit', () => { process.exitCode = 1; });`,
+  "exit-listener-explicit.js": `process.on('exit', () => process.exit(3));`,
+  "exit-explicit-overrides.js": `process.exitCode = 7;
+process.on('exit', code => console.log('exit code=' + code));
+process.exit(2);`,
+  "exit-listener-throws.js": `process.on('exit', () => { throw new Error('exit failed'); });`,
+  "exit-listener-throws-explicit.js": `process.on('exit', () => { throw new Error('exit failed'); }); process.exit(2);`,
+  "exit-listener-throws-code.js": `process.exitCode = 7; process.on('exit', () => { throw new Error('exit failed'); });`,
+  "promise-export.cjs": `module.exports = Promise.resolve(42);`,
+  "pending-export.cjs": `module.exports = new Promise(() => {});`,
+  "rejected-export.cjs": `const value = Promise.reject(new Error('export rejected')); value.catch(() => {}); module.exports = value;`,
+  "import-pending.cjs": `import('./pending-export.cjs').then(m => console.log(typeof m.default.then));`,
+  "import-rejected.cjs": `import('./rejected-export.cjs').then(async m => console.log(typeof m.default.then, await m.default.catch(e => e.message)));`,
+  "import-promise.cjs": `import('./promise-export.cjs').then(async m => console.log(typeof m.default.then, await m.default));`,
+  "import-promise.mjs": `const m = await import('./promise-export.cjs'); console.log(typeof m.default.then, await m.default);`,
+  "async-config.mjs": `await new Promise(r => setTimeout(r, 5));
+export default { plugins: ['loaded'] };`,
+  "async-config-bad.mjs": `await new Promise(r => setTimeout(r, 5));
+throw new Error('config rejected');`,
+  "replace-exports.cjs": `await Promise.resolve(); module.exports = { ready: true };`,
+  "override-exports.mjs": `const value = await Promise.resolve({ ready: true }); export { value as "module.exports" };`,
+  "import-config.cjs": `import('./async-config.mjs').then(m => console.log(JSON.stringify(m.default)));`,
+  "import-config.mjs": `console.log(JSON.stringify((await import('./async-config.mjs')).default));`,
+  "import-config-bad.cjs": `import('./async-config-bad.mjs').then(() => console.log('WRONG'), e => console.log(e.message.includes('config rejected')));`,
   "loud.js": `console.log('EXECUTED');
 `,
   // --check went through the loader's compileWrapper, which uses indirect eval so it
@@ -124,6 +148,19 @@ const CASES = [
   ["bad-option", ["--bogus", "main.js"]],
   ["exit-honours-exitcode", ["exit-bare.js"]],
   ["exit-bare-still-zero", ["exit-bare-unset.js"]],
+  ["exit-listener-sets-code", ["exit-listener-code.js"]],
+  ["exit-listener-calls-exit", ["exit-listener-explicit.js"]],
+  ["explicit-exit-overrides-code", ["exit-explicit-overrides.js"]],
+  ["exit-listener-throws", ["exit-listener-throws.js"]],
+  ["throwing-exit-listener-preserves-explicit-code", ["exit-listener-throws-explicit.js"]],
+  ["throwing-exit-listener-preserves-exitcode", ["exit-listener-throws-code.js"]],
+  ["cjs-import-preserves-promise-export", ["import-promise.cjs"]],
+  ["esm-import-preserves-promise-export", ["import-promise.mjs"]],
+  ["import-preserves-pending-export", ["import-pending.cjs"]],
+  ["import-preserves-rejected-export", ["import-rejected.cjs"]],
+  ["cjs-import-awaits-config", ["import-config.cjs"]],
+  ["esm-import-awaits-config", ["import-config.mjs"]],
+  ["import-rejects-with-config", ["import-config-bad.cjs"]],
   // Everything after `--` is the program: breaking out of the parse loop with no entry
   // meant this ran nothing and said nothing. Pre-existing, but in the loop this commit
   // rewrote, so it is pinned here now.
@@ -314,6 +351,34 @@ console.log("\na pipe or a redirect on stdin is not a terminal");
       console.log(`      vm:   ${JSON.stringify(vmOut.trim().slice(0, 60))}`);
     }
   }
+}
+
+// Vivari intentionally routes rewritten import() through its CommonJS hook
+// seam. Native Node's separate ESM resolver is not the oracle for this contract.
+console.log("\ndynamic imports retain the runtime's Module._load hook seam");
+{
+  const source = `const Module = require('module');
+const original = Module._load;
+require('./promise-export.cjs');
+Module._load = function(name, parent, isMain) {
+  if (name === 'virtual:config') return { value: 'virtual' };
+  if (name === './promise-export.cjs') return { value: 'replacement' };
+  return original(name, parent, isMain);
+};
+Promise.all([import('virtual:config'), import('./promise-export.cjs')]).then(modules => console.log(modules.map(m => m.default.value).join(',')));`;
+  kernel.writeFile("/app/hook-imports.cjs", source);
+  const result = await kernel.start("node", ["hook-imports.cjs"], { cwd: "/app", capture: true });
+  ok(result.code === 0 && result.stdout.trim() === "virtual,replacement", "virtual and cached-module replacements both reach dynamic import");
+}
+{
+  const source = `(async () => { for (const name of ['./replace-exports.cjs', './override-exports.mjs']) {
+    const first = await import(name); const second = await import(name);
+    console.log(first.default.ready, second.default.ready);
+  } })();`;
+  kernel.writeFile("/app/replaced-imports.cjs", source);
+  const result = await kernel.start("node", ["replaced-imports.cjs"], { cwd: "/app", capture: true });
+  ok(result.code === 0 && result.stdout.trim() === "true true\ntrue true", "imports refresh exports replaced during evaluation (CJS-shaped await and ESM override)");
+  if (result.code !== 0) console.log(result.stderr);
 }
 
 console.log(failed === 0 ? "\nnode CLI: OK" : `\nnode CLI: ${failed} FAILED`);

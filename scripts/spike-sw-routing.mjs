@@ -82,7 +82,7 @@ function ok(cond, label) {
 // `function` declarations land on the context object, so handlePreview and
 // friends can be replaced from out here — the point is to observe WHICH branch a
 // request takes, not to re-implement the VM proxy.
-function loadSw({ hostname = "localhost" } = {}) {
+function loadSw({ hostname = "localhost", scope = "/" } = {}) {
   const calls = { fetch: [] };
   const listeners = {};
   const emptyCache = {
@@ -113,7 +113,7 @@ function loadSw({ hostname = "localhost" } = {}) {
     location: new URL(`http://${hostname}:5173/sw.js`),
     addEventListener: (type, fn) => ((listeners[type] ??= []).push(fn), undefined),
     clients: { get: async () => undefined, matchAll: async () => [], claim: async () => {} },
-    registration: { scope: `${ORIGIN}/` },
+    registration: { scope: `${ORIGIN}${scope}` },
     skipWaiting: () => {},
   };
   ctx.globalThis = ctx;
@@ -121,12 +121,14 @@ function loadSw({ hostname = "localhost" } = {}) {
   vm.runInContext(fs.readFileSync(SW_SRC, "utf8"), ctx, { filename: "packages/studio/public/sw.js" });
   ctx.__calls = calls;
   ctx.__listeners = listeners;
+  ctx.__realHandlePreview = ctx.handlePreview;
   // Never talk to a real VM: every gate below asserts on the ROUTE taken.
   ctx.handlePreview = async (event, port, p) => {
     ctx.__proxied = { port, path: p };
     return new Response("from-vm", { status: 200 });
   };
   ctx.loadKeepPrefixPorts = async () => new Set();
+  ctx.hasPreviewServer = async (port) => [3000, 5173].includes(port);
   return ctx;
 }
 
@@ -292,6 +294,52 @@ console.log("\n9. the pre-existing routes are unchanged");
   await event.responded;
   ok(ctx.__proxied?.port === 3000, "an explicit /preview/<port>/ URL still routes into the VM");
   ok(ctx.__proxied?.path === "/api/users?q=1", `with the prefix stripped (${ctx.__proxied?.path})`);
+}
+
+console.log("\n9b. source folders named preview are ordinary client-routed paths");
+{
+  const ctx = loadSw();
+  ctx.hasPreviewServer = async () => null;
+  ctx.resolveKernelSink = async () => null;
+  ctx.handlePreview = ctx.__realHandlePreview;
+  const event = dispatch(ctx, { url: `${ORIGIN}/preview/3000/`, mode: "navigate" });
+  const response = await event.responded;
+  ok(response?.resolved && response.value.status === 200 && (await response.value.text()).includes('Connect this tab'), "an unreachable kernel retains the preview recovery page");
+  ok(ctx.__calls.fetch.length === 0, "disconnected preview navigation does not escape to static hosting");
+}
+{
+  const ctx = loadSw();
+  delete ctx.hasPreviewServer;
+  // Restore the shipped implementation, replacing only its kernel transport.
+  vm.runInContext(fs.readFileSync(SW_SRC, "utf8").match(/async function hasPreviewServer\(port\) \{[\s\S]*?\n\}/)[0], ctx);
+  for (const live of [true, false]) {
+    ctx.resolveKernelSink = async () => ({ post(message, ports) {
+      ok(message.type === "vv-preview-port" && message.port === 3000, "queries the kernel's live registry");
+      ports[0].postMessage(live);
+      ports[0].close();
+    } });
+    ok(await ctx.hasPreviewServer(3000) === live, `live-port reply ${live} is honored`);
+  }
+}
+for (const scope of ["/", "/sandbox/"]) {
+  for (const p of ["/src/components/preview/Thing.tsx", "/src/preview/3000/Thing.tsx", "/preview/5173oops/Thing.tsx", "/preview/65536/Thing.tsx", "/preview/4321/Thing.tsx"]) {
+    const ctx = loadSw({ scope });
+    const event = dispatch(ctx, { url: ORIGIN + p, clientUrl: `${ORIGIN}${scope}preview/5173/` });
+    await event.responded;
+    ok(ctx.__proxied?.port === 5173 && ctx.__proxied?.path === p, `${scope}: ${p} follows its preview client`);
+  }
+  const ctx = loadSw({ scope });
+  const event = dispatch(ctx, { url: `${ORIGIN}${scope}preview/3000/api?q=1`, mode: "navigate" });
+  await event.responded;
+  ok(ctx.__proxied?.port === 3000 && ctx.__proxied?.path === "/api?q=1", `${scope}: a live scoped proxy prefix still routes`);
+}
+{
+  const ctx = loadSw({ hostname: "token--5173.preview.test" });
+  for (const [p, port, target] of [["/preview/3000/api", 3000, "/api"], ["/preview/4321/api", 5173, "/preview/4321/api"], ["/src/preview/Thing.tsx", 5173, "/src/preview/Thing.tsx"]]) {
+    const event = dispatch(ctx, { url: `http://token--5173.preview.test:5173${p}` });
+    await event.responded;
+    ok(ctx.__proxied?.port === port && ctx.__proxied?.path === target, `wildcard: ${p} reaches ${port}${target}`);
+  }
 }
 
 console.log("\n10. the premise: boot-path modules really are served from /@fs/");
