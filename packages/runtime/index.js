@@ -2054,8 +2054,8 @@ export function createRuntime({
       // Node fires a single synchronous 'exit' event with the final code right
       // before the process goes away - tools flush buffered output/logs there
       // (npm's exit-handler). Emit it once across every exit path below. A
-      // listener may itself call process.exit() (→ throws the sentinel); we're
-      // already exiting, so swallow it.
+      // listener may itself change exitCode or call process.exit() (the sentinel
+      // changes the final code without emitting the event a second time).
       // Attach the breakpoint debugger BEFORE the entry compiles (compile() reads
       // globalThis.__vvDebugHook to weave in probes). Lazy import keeps acorn + the
       // backend out of every ordinary process.
@@ -2102,14 +2102,19 @@ export function createRuntime({
       const finish = (code) => {
         if (!exitEmitted) {
           exitEmitted = true;
-          if (process.exitCode == null) process.exitCode = code;
+          process.exitCode = code;
           try {
             process.emit("exit", code);
-          } catch {
-            /* a listener called process.exit() - the sentinel is expected */
+          } catch (err) {
+            if (err && err.__processExit !== undefined) return err.__processExit;
+            console.error((err && err.stack) || err);
+            return (process.exitCode | 0) || 1;
           }
         }
-        return code;
+        // Exit listeners (notably npm's unfinished-install guard) may set the
+        // status synchronously. Node uses that final value, not the value passed
+        // to the event before its listeners ran.
+        return process.exitCode == null ? code : process.exitCode | 0;
       };
       // Anything already holding the loop at this point is not the guest's, because
       // the guest has not run a line yet — so it must not keep the guest alive.

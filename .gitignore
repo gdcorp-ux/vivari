@@ -11,6 +11,7 @@ node_modules
 # Built SDK packages (rebuild with `npm run build:sdk`)
 /packages/core/dist
 /packages/react/dist
+/packages/core/*.tgz
 
 # Unified Cloudflare Pages output (rebuild with `npm run build:site`)
 /dist

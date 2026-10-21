@@ -711,6 +711,19 @@ UTF-8; binary (images/fonts/wasm) crosses base64 with `bodyEncoding: 'base64'`
 
 ### 8.3 Browser preview (Service Worker)
 
+Proxy prefixes are recognized only at the service worker's registration scope
+root, with a complete port number in 1–65535 and a live kernel listener. The SW
+queries the kernel through `vv-preview-port` over the same reply-port transport
+as `vv-http`; both same-origin and separate-origin bridges relay it. No second
+port registry survives independently of the kernel. Other paths, including
+`/src/components/preview/Thing.tsx` and inactive numeric prefixes, follow their
+requesting client. Wildcard origins use their own port for ordinary paths and
+retain explicit cross-service routing for live ports. `X-Forwarded-Prefix` is
+added only when an actual proxy prefix was stripped.
+An unreachable kernel is distinct from an absent listener: explicit navigations
+retain the existing connecting/recovery page until the bridge reconnects.
+
+
 `packages/studio/public/sw.js` is a preview proxy scoped to the whole origin (needs
 `Service-Worker-Allowed: /`). It intercepts the preview iframe's `fetch`
 (`/preview/<port>/…` and root-absolute subresources like `/@vite/client`,

@@ -487,8 +487,8 @@ export class KernelBridge {
     // transferring the reply port so the worker answers the SW directly.
     this.listen(navigator.serviceWorker, "message", (event: Event) => {
       const d = (event as MessageEvent).data;
-      if (d?.type === "vv-http") {
-        this.worker.postMessage({ type: "vv-http", req: d.req }, [(event as MessageEvent).ports[0]]);
+      if (d?.type === "vv-http" || d?.type === "vv-preview-port") {
+        this.worker.postMessage(d, [(event as MessageEvent).ports[0]]);
         return;
       }
       // ws/SSE from a preview opened in its OWN tab (COOP severs window.opener, so
@@ -592,8 +592,8 @@ export class KernelBridge {
   private onKernelPortMessage(event: MessageEvent): void {
     const d = event.data;
     if (!d) return;
-    if (d.type === "vv-http") {
-      this.worker.postMessage({ type: "vv-http", req: d.req }, event.ports[0] ? [event.ports[0]] : []);
+    if (d.type === "vv-http" || d.type === "vv-preview-port") {
+      this.worker.postMessage(d, event.ports[0] ? [event.ports[0]] : []);
       return;
     }
     if (d.dir === "out" && (d.type === "vv-ws" || d.type === "vv-sse")) {

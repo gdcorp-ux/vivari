@@ -61,6 +61,7 @@ const VENDOR_NPM = path.join(VENDOR_DIR, "node_modules/npm");
 // Keep the pins in sync with the spike that asserts on them and with the matching
 // scripts/vendor-*.mjs (each of those already carries the same note).
 const VENDORS = {
+  postcss: { install: ["vite@6.4.4", "esbuild@npm:esbuild-wasm@0.25.12", "rollup@npm:@rollup/wasm-node@4.53.3"], dir: "/tmp/vv-postcss-config", arg: ".", probe: "node_modules/vite/package.json" },
   yarn: { install: ["yarn@1.22.22"], dir: "/tmp/vv-vendor-yarn", arg: "node_modules/yarn", probe: "bin/yarn.js" },
   pnpm: { install: ["pnpm@9.15.9"], dir: "/tmp/vv-vendor-pnpm", arg: "node_modules/pnpm", probe: "bin/pnpm.cjs" },
   corepack: { install: ["corepack@0.35.0"], dir: "/tmp/vv-vendor-corepack", arg: "node_modules/corepack", probe: "dist/corepack.js" },
@@ -306,6 +307,7 @@ const SPIKES = [
   // A ref'd MessagePort holds the loop, with or without a listener. This is what
   // `vitest run` was exiting 0 in the middle of; every case runs against the host.
   { name: "port-liveness", file: "spike-port-liveness.mjs", net: false, needsWasm: true, timeout: 180000 },
+  { name: "postcss-config", file: "spike-postcss-config.mjs", net: true, vendor: VENDORS.postcss, needsWasm: true, timeout: 180000 },
   // The same rules on a browser-shaped port, where headless cannot look: only
   // onmessage starts a port there, nothing refs, and a closed peer says nothing.
   { name: "port-browser", file: "spike-port-browser.mjs", net: false, timeout: 60000 },

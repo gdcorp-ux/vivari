@@ -7,6 +7,25 @@ Status: ✅ done · 🚧 in progress · ⏳ next · 🧊 later
 
 ---
 
+## Runtime configuration and preview routing fixes (2026-10-21)
+
+- Scope-anchor preview proxy parsing and check the kernel's live listener before
+  treating a numeric prefix as a proxy. A source directory named `preview` must
+  not be parsed as a port. Gates: `spike-sw-routing` and the manual built-SDK
+  Chromium regression `scripts/repro-preview-config.mjs`.
+- Dynamic import now awaits the imported module's evaluation promise. Vite 6's
+  PostCSS loader was finding and importing project configs correctly, but a config
+  containing top-level `await import(...)` exposed unfinished exports, so PostCSS
+  silently saw no plugins. Generic `.mjs`/ESM `.js`/`.cjs` config fixtures exercise
+  the real CSS pipeline; delayed imports and rejections also have offline gates.
+- Final process status is sampled after synchronous exit listeners; nested exits
+  and exceptions propagate. npm's exit-listener failure guard can no longer print
+  an error while the SDK resolves success. Compared with real Node in the CLI gate.
+- A generic iframe inside a preview renders in the Chromium regression. A larger
+  builder's loading state still needs investigation at the application readiness
+  layer; no application-specific behavior was added to the runtime.
+
+
 ## 🧱 Brick 1 — Synchronous FS Bridge ✅
 
 The load-bearing primitive of the whole system: user code in a Web Worker calls a

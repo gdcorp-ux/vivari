@@ -3,6 +3,12 @@
 From 1.1.0 on, entries are generated from [changesets](https://github.com/changesets/changesets).
 `@vivari/core` and `@vivari/react` are released together under the same version.
 
+## 1.1.3-gdux.0
+
+### Patch Changes
+
+- Keep source directories named `preview` on client-based routing, await asynchronous ESM configuration modules before exposing their exports, and report exit-listener changes to the final process status.
+
 ## 1.1.2
 
 ### Patch Changes
