@@ -3,6 +3,12 @@
 From 1.1.0 on, entries are generated from [changesets](https://github.com/changesets/changesets).
 `@vivari/core` and `@vivari/react` are released together under the same version.
 
+## 1.1.3-gdux.1
+
+### Patch Changes
+
+- Provide a shared release SDK build command that rebuilds optimized browser Wasm before packaging, avoiding development-profile artifacts in local tarballs.
+
 ## 1.1.3-gdux.0
 
 ### Patch Changes

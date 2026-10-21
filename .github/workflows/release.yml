@@ -114,11 +114,7 @@ jobs:
       - name: Build and check the packages
         if: steps.plan.outputs.publish == 'true'
         run: |
-          npm run build:vfs
-          npm run build:codec
-          npm run build:crypto
-          npm run build:sdk
-          npm run smoke
+          npm run build:sdk:release
 
       # @vivari/react names @vivari/core as a peer, so core goes first. Nothing waits for
       # npm to make them installable: its automated review held core 1.1.0 in

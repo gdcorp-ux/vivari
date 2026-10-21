@@ -59,6 +59,7 @@
     "assemble:preview": "node scripts/assemble-preview.mjs",
     "assemble:worker": "node scripts/assemble-worker.mjs",
     "build:sdk": "npm run build:core && npm run build:react",
+    "build:sdk:release": "npm run build:vfs && npm run build:codec && npm run build:crypto && npm run build:sdk && npm run smoke",
     "typecheck:sdk": "npm run typecheck --workspace @vivari/core && npm run typecheck --workspace @vivari/react",
     "changeset": "changeset",
     "version-packages": "node scripts/version-packages.mjs",

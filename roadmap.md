@@ -9,6 +9,34 @@ Status: ✅ done · 🚧 in progress · ⏳ next · 🧊 later
 
 ## Runtime configuration and preview routing fixes (2026-10-21)
 
+### SDK tarballs must rebuild release-profile Wasm (2026-10-21)
+
+The first fork tarball bundled `wasm-pack --dev` output. An untouched 1.1.2
+control built with that recipe reproduced the same 1.91 MB filesystem worker,
+10.52 MB kernel worker and 9.98 MB process worker. Rebuilding the same upstream
+source with release-profile Wasm reduced those to 0.45 / 2.87 / 4.14 MB, close
+to the published package's 0.45 / 2.81 / 4.09 MB. This was a build-profile issue,
+not a runtime regression or Vite minification issue. wasm-pack downloaded and
+ran wasm-opt itself; no standalone installation was necessary.
+
+`build:sdk:release` now shares the existing release workflow's complete recipe:
+release web Wasm for all three crates, both SDK builds, then smoke. Use it before
+packing; `build:core` intentionally remains a fast incremental build. Changesets
+generated the paired `1.1.3-gdux.1` prerelease. Local tools: Node 24.21.0,
+Rust 1.94.0, wasm-pack 0.14.0; CI retains its pinned wasm-pack 0.13.1. Sizes are
+comparable, not byte-identical across toolchains.
+
+On a 589 MB, 73-batch integration snapshot, the original fork mounted in 69.04 s
+and reached dev-ready in another 32.70 s. The optimized tarball mounted in
+13.57 s / 12.64 s across two sequential muted headless runs, with dev-ready
+22.59 s / 22.07 s. Styled rendering and live edits passed in both; an explicit
+nested-frame heading assertion and visual inspection confirmed the nested site
+in the second. The first screenshot was taken while its loading UI was visible.
+Sampled renderer RSS was 4,703 / 5,872 MiB: packaging performance is corrected,
+but this does not establish a memory reduction or suitability for small laptops.
+
+### Runtime changes
+
 - Scope-anchor preview proxy parsing and check the kernel's live listener before
   treating a numeric prefix as a proxy. A source directory named `preview` must
   not be parsed as a port. Gates: `spike-sw-routing` and the manual built-SDK
@@ -21,9 +49,9 @@ Status: ✅ done · 🚧 in progress · ⏳ next · 🧊 later
 - Final process status is sampled after synchronous exit listeners; nested exits
   and exceptions propagate. npm's exit-listener failure guard can no longer print
   an error while the SDK resolves success. Compared with real Node in the CLI gate.
-- A generic iframe inside a preview renders in the Chromium regression. A larger
-  builder's loading state still needs investigation at the application readiness
-  layer; no application-specific behavior was added to the runtime.
+- A generic iframe inside a preview renders in the Chromium regression. The
+  follow-up integration check also confirms the larger builder's nested site;
+  no application-specific behavior was added to the runtime.
 
 
 ## 🧱 Brick 1 — Synchronous FS Bridge ✅

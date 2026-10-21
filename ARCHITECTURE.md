@@ -2451,6 +2451,11 @@ run script in the studio's origin, which is the origin holding the kernel bridge
 
 ## 10. Build & run
 
+`npm run build:sdk:release` is the SDK packaging recipe, shared with the release
+workflow: rebuild browser VFS/codec/crypto with the default wasm-pack release
+profile and wasm-opt, build both SDKs, then smoke-test. `build:core` alone does
+not rebuild Wasm; it may bundle previously generated development artifacts.
+
 - **Dev (studio, default)**: `npm run dev` → `cd packages/studio && bun run dev`
   (Vite, default `:5173`). `vite.config.ts` sends COOP/COEP on the dev + preview
   servers, stamps `Service-Worker-Allowed: /` on `/sw.js`, sets `worker.format:'es'`,

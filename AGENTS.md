@@ -5506,6 +5506,14 @@ cost multiple sessions:
    reads like a code bug and is not one. Suspect the artifact before the source
    whenever the browser alone rejects a capability the Node tier exercises happily.
 
+**Packaging the SDK:** use `npm run build:sdk:release` before `npm pack`. This
+rebuilds all three browser Wasm crates with wasm-pack's default release profile
+(including wasm-opt), builds both SDKs, and runs smoke; `release.yml` uses the
+same command. `build:core` alone reuses whatever is in `pkg/`, including slow,
+oversized `--dev` artifacts. A development-profile tarball is not representative
+of published-package performance. wasm-pack manages wasm-opt itself; it need not
+be installed on PATH.
+
 - `npm run verify` — `scripts/verify-node.mjs`, headless end-to-end (fs, process,
   shell, http, timers, watch, worker_threads incl. `receiveMessageOnPort`). **Run
   this after any runtime/protocol change.** No network needed.
