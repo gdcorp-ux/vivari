@@ -104,6 +104,10 @@ ok(patched != null, "patch returns a rewritten source for esbuild-wasm@0.28.1");
 ok(patched != null && patched.includes("[Vivari] in-process esbuild service"), "rewrite carries the OC marker");
 ok(patched != null && !patched.includes('child_process.spawn(command'), "child spawn removed");
 ok(patched != null && patched.includes('--service=${"0.28.1"}'), "version 0.28.1 threaded into --service");
+const goEnv = patched.match(/__ocGo.env = (Object.assign\([^;]+\));/)[1];
+const evaluateGoEnv = new Function('os2', 'process', `return ${goEnv}`);
+ok(evaluateGoEnv({ tmpdir: () => '/tmp' }, { env: {} }).GOMEMLIMIT === '768MiB', 'esbuild Go service defaults to a soft memory limit');
+ok(evaluateGoEnv({ tmpdir: () => '/tmp' }, { env: { GOMEMLIMIT: 'off' } }).GOMEMLIMIT === 'off', 'explicit guest Go memory limit wins');
 
 // idempotent: patching the patched source again is a no-op
 ok(maybePatchEsbuildInProcess(patched, MAIN, wasmPresent, path) === null, "already-patched source is a no-op");
