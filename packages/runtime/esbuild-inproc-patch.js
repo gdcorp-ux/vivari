@@ -131,7 +131,9 @@ const ESB_INPROC_NEW = `  // [Vivari] in-process esbuild service (no child spawn
   }
   const __ocGo = new globalThis.Go();
   __ocGo.argv = ["node", \`--service=\${"%VER%"}\`];
-  __ocGo.env = Object.assign({ TMPDIR: os2.tmpdir() }, process.env);
+  // Collect before transient scans permanently grow this tab's Wasm memory.
+  // GOMEMLIMIT is soft; explicit guest settings take precedence.
+  __ocGo.env = Object.assign({ TMPDIR: os2.tmpdir(), GOMEMLIMIT: "768MiB" }, process.env);
   let { readFromStdout, afterClose, service } = createChannel({
     writeToStdin(bytes) {
       __ocStdin.push(bytes);

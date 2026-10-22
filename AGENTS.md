@@ -4751,6 +4751,10 @@ shrink on a Nuxt `node_modules` (929 MB → 274 MB), dropping the real Chrome ta
   change here needs `npm run build:vfs && npm run build:vfs:node` to rebuild the wasm.
 
 ### Measure Memory: per-PID Process Worker breakdown
+The in-process esbuild service supplies a `GOMEMLIMIT=768MiB` default, overridden
+by the guest environment. Keep overrides working: the limit is a soft GC target,
+not a hard memory cap. The toolchain spike tests the emitted environment.
+
 Post-compression, the tab's largest term is the **Process Worker JS heap** (dev servers), but
 `performance.measureUserAgentSpecificMemory()` only attributes it to the shared
 `process-worker.js` URL — not to a PID. "Measure Memory" adds a per-process breakdown:

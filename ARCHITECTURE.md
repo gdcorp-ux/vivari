@@ -1333,6 +1333,11 @@ lazily on first use (a process that never hashes/compresses instantiates neither
 
 ### 9.1 Toolchain shims (esbuild, rollup, worker pools)
 
+The in-process esbuild Go service defaults `GOMEMLIMIT` to `768MiB` before startup;
+guest environment values override it. This is Go's soft GC target, not a cap on
+Wasm linear memory or the tab. Wasm pages cannot shrink after growth, so avoiding
+transient heap expansion matters even when the build later becomes idle.
+
 `wasm32-wasi` auto-select (above) covers native addons that publish a wasm build
 as an optional dependency (rolldown, `@node-rs/*`). Some packages don't fit that
 mould — they ship a drop-in under a *different package name* that npm's platform

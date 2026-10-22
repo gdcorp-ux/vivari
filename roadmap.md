@@ -9,6 +9,15 @@ Status: ✅ done · 🚧 in progress · ⏳ next · 🧊 later
 
 ## Runtime configuration and preview routing fixes (2026-10-21)
 
+### Reduce esbuild's permanent Wasm footprint (2026-10-21)
+
+A large installed project grew esbuild's Go memory to roughly 2.4 GiB. Supplying
+the standard `GOMEMLIMIT=768MiB` soft target before service startup reduced the
+observed linear capacity to about 1.6 GiB with successful render and live edit.
+This is not a hard limit on the tab; retain explicit guest overrides. Lowering
+the target to 512 MiB with GOGC=50 missed the startup deadline and was rejected.
+No dependency files or toolchain output are rewritten.
+
 ### SDK tarballs must rebuild release-profile Wasm (2026-10-21)
 
 The first fork tarball bundled `wasm-pack --dev` output. An untouched 1.1.2
