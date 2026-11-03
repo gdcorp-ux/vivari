@@ -70,6 +70,8 @@ const PATH_FIELDS = {
 // Ops that read the path itself rather than what a trailing symlink points to.
 const NO_FOLLOW = new Set([OP_LSTAT, OP_READLINK, OP_UNLINK, OP_RENAME, OP_SYMLINK, OP_LINK]);
 const READS = new Set([OP_READ_FILE, OP_EXISTS, OP_READDIR, OP_STAT, OP_LSTAT, OP_READLINK, OP_OPEN, OP_WATCH]);
+// Ops that move or remove a directory along with whatever is still due inside it.
+const MOVES = new Set([OP_RENAME, OP_RMDIR]);
 
 // POSIX path helpers (the VFS speaks absolute POSIX paths). Kept local so the
 // server has no dependency on a path module.
@@ -143,6 +145,7 @@ export class FsServer {
     // own requests are never held: it delivers the batches.
     this.expected = new Set(); // absolute file paths not yet written
     this.expectedDirs = new Map(); // directory -> count of expected direct children
+    this.expectedTrees = new Map(); // directory -> count of expected files at any depth below it
     this.held = new Map(); // clientId -> the expected path it is parked on
     this.onHold = null; // optional (path) => void, so the embedder can send that file first
     this.trace = null; // Set of every path requested while tracing (setTrace)
@@ -157,12 +160,14 @@ export class FsServer {
     if (clear) {
       this.expected.clear();
       this.expectedDirs.clear();
+      this.expectedTrees.clear();
     }
     for (const path of paths) {
       if (this.expected.has(path) || this.vfs.exists(path)) continue;
       this.expected.add(path);
       const dir = path.slice(0, path.lastIndexOf("/")) || "/";
       this.expectedDirs.set(dir, (this.expectedDirs.get(dir) || 0) + 1);
+      this._countTree(path, 1);
     }
     this._release();
     return this.expected.size;
@@ -184,6 +189,16 @@ export class FsServer {
     const left = this.expectedDirs.get(dir) - 1;
     if (left > 0) this.expectedDirs.set(dir, left);
     else this.expectedDirs.delete(dir);
+    this._countTree(path, -1);
+  }
+
+  // Add `by` to every ancestor directory of the expected file `path`.
+  _countTree(path, by) {
+    for (let at = path.lastIndexOf("/"); at > 0; at = path.lastIndexOf("/", at - 1)) {
+      const dir = path.slice(0, at), left = (this.expectedTrees.get(dir) || 0) + by;
+      if (left > 0) this.expectedTrees.set(dir, left);
+      else this.expectedTrees.delete(dir);
+    }
   }
 
   // Re-run parked requests; any still waiting on an expected path park again.
@@ -218,10 +233,11 @@ export class FsServer {
   }
 
   _expects(path, opcode) {
-    if (this.expected.has(path) || (opcode === OP_READDIR && this.expectedDirs.has(path))) return true;
+    const due = (p) => this.expected.has(p) || (opcode === OP_READDIR && this.expectedDirs.has(p)) ||
+      (MOVES.has(opcode) && this.expectedTrees.has(p));
+    if (due(path)) return true;
     const resolved = this._resolve(path, !NO_FOLLOW.has(opcode));
-    return resolved !== null && resolved !== path &&
-      (this.expected.has(resolved) || (opcode === OP_READDIR && this.expectedDirs.has(resolved)));
+    return resolved !== null && resolved !== path && due(resolved);
   }
 
   // Should this request wait for an expected file? Literal paths are checked up

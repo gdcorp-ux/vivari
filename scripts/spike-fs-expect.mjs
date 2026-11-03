@@ -104,6 +104,25 @@ ok(await until(() => holds.includes("/app/node_modules/alias/made.js")), "a writ
 await kernelFs.fs.writeFilesBatch([{ path: "/app/node_modules/late/made.js", bytes: text("batch") }]);
 ok(/made user/.test((await made).stdout || ""), "the write lands after the batch, so it wins");
 
+// Moving or removing a folder waits for files still due anywhere inside it, so a
+// later batch cannot recreate the old folder and leave the moved copy incomplete.
+holds.length = 0;
+kernel.mkdirp("/app/node_modules/part/lib");
+await kernelFs.fs.writeFilesBatch([{ path: "/app/node_modules/part/index.js", bytes: text("index") }]);
+await call("fs-expect", { paths: ["/app/node_modules/part/lib/deep.js"] });
+writeProject(kernel, "/app", { "move.js": "const fs = require('fs'); fs.renameSync('/app/node_modules/part', '/app/node_modules/moved'); console.log('moved ' + fs.readFileSync('/app/node_modules/moved/lib/deep.js', 'utf8') + ' ' + fs.existsSync('/app/node_modules/part'));" });
+const move = kernel.start("node", ["move.js"], { cwd: "/app", capture: true });
+ok(await until(() => holds.includes("/app/node_modules/part")), "renaming a folder with a file still due inside it waits");
+await kernelFs.fs.writeFilesBatch([{ path: "/app/node_modules/part/lib/deep.js", bytes: text("deep") }]);
+ok(/moved deep false/.test((await move).stdout || ""), "the rename lands after the batch, carrying the delivered file");
+kernel.mkdirp("/app/node_modules/empty/sub");
+await call("fs-expect", { paths: ["/app/node_modules/empty/sub/due.js"] });
+writeProject(kernel, "/app", { "rmdir.js": "const fs = require('fs'); try { fs.rmdirSync('/app/node_modules/empty/sub'); console.log('rmdir done'); } catch (e) { console.log('rmdir ' + e.code); }" });
+const rmdir = kernel.start("node", ["rmdir.js"], { cwd: "/app", capture: true });
+ok(await until(() => holds.includes("/app/node_modules/empty/sub")), "removing a folder with a file still due waits");
+await kernelFs.fs.writeFilesBatch([{ path: "/app/node_modules/empty/sub/due.js", bytes: text("due") }]);
+ok(/rmdir ENOTEMPTY/.test((await rmdir).stdout || ""), "the removal then sees the delivered file");
+
 // The kernel's own requests are never held: it is what delivers the batches.
 await call("fs-expect", { paths: ["/app/node_modules/kernel.js"] });
 ok(!kernel.exists("/app/node_modules/kernel.js"), "the kernel's own lookups answer at once");
