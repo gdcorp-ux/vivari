@@ -95,6 +95,15 @@ ok(await until(() => holds.includes("/app/node_modules/alias/ghost.js")), "a rea
 await call("fs-expect", { paths: [], clear: true });
 ok(/ghost ENOENT/.test((await ghost).stdout || ""), "clearing the promise releases it with ENOENT");
 
+// Creating a promised file through a symlink waits too, so the batch can't overwrite it.
+holds.length = 0;
+await call("fs-expect", { paths: ["/app/node_modules/late/made.js"] });
+writeProject(kernel, "/app", { "made.js": "require('fs').writeFileSync('/app/node_modules/alias/made.js', 'user'); console.log('made ' + require('fs').readFileSync('/app/node_modules/late/made.js', 'utf8'));" });
+const made = kernel.start("node", ["made.js"], { cwd: "/app", capture: true });
+ok(await until(() => holds.includes("/app/node_modules/alias/made.js")), "a write through a symlink to a promised file waits");
+await kernelFs.fs.writeFilesBatch([{ path: "/app/node_modules/late/made.js", bytes: text("batch") }]);
+ok(/made user/.test((await made).stdout || ""), "the write lands after the batch, so it wins");
+
 // The kernel's own requests are never held: it is what delivers the batches.
 await call("fs-expect", { paths: ["/app/node_modules/kernel.js"] });
 ok(!kernel.exists("/app/node_modules/kernel.js"), "the kernel's own lookups answer at once");

@@ -235,7 +235,9 @@ export class FsServer {
       const path = decodeBytes(fields[i]);
       if (phase === "before") {
         if (this.expected.has(path) || (opcode === OP_READDIR && this._expects(path, opcode))) return path;
-        if (!READS.has(opcode) && this._expects(path, opcode)) return path;
+        // A writable open (O_CREAT/O_TRUNC/write access) mutates like a write.
+        const mutates = !READS.has(opcode) || (opcode === OP_OPEN && ((bytesToU32(fields[1]) & 0o3) !== 0 || (bytesToU32(fields[1]) & (O_CREAT | O_TRUNC)) !== 0));
+        if (mutates && this._expects(path, opcode)) return path;
       } else if ((error === "ENOENT" || error === "ENOTDIR") && this._expects(path, opcode)) return path;
     }
     return null;
