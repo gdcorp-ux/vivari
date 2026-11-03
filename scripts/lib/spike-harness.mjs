@@ -175,7 +175,7 @@ export async function bootSpikeKernel({ npm = false } = {}) {
 
   // kernelFs is the FS client the kernel was built on — spike-dep-cache drives
   // its depCache* methods directly, since those are what it exists to prove.
-  const h = { kernel, kernelFs, out, listening, VFS_NPM, loadRealNpm };
+  const h = { kernel, kernelFs, fsWorker, out, listening, VFS_NPM, loadRealNpm };
   if (npm) loadRealNpm();
   return h;
 }

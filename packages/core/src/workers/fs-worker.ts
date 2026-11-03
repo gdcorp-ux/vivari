@@ -71,6 +71,16 @@ function handle(msg) {
         post("fs-write-batch-err", { id: msg.id, error: String(err?.message || err) });
       }
       break;
+    // Embedder requests answered by id (see the kernel's vv-fs-expect/vv-fs-trace).
+    case "fs-expect":
+    case "fs-trace":
+      try {
+        const result = msg.type === "fs-expect" ? server.expect(msg.paths || [], !!msg.clear) : server.setTrace(!!msg.on);
+        post("fs-call-ok", { id: msg.id, result });
+      } catch (err) {
+        post("fs-call-err", { id: msg.id, error: String(err?.message || err) });
+      }
+      break;
     case "fs-flush": // page is hiding — best-effort force the mirror to disk
       if (server && server.persistence) server.persistence.flush();
       break;
@@ -392,6 +402,9 @@ async function createOpfsDepStorage() {
   // cost to peak residency — and the kernel cannot see the read, which happens
   // here over the SAB.
   server.onBodyConsumed = (path) => post("fetch-body-consumed", { path });
+  // A process is parked on a file the embedder promised (vv-fs-expect): tell it
+  // which, so it can deliver that file's batch first.
+  server.onHold = (path) => post("fs-hold", { path });
   post("ready");
   for (const msg of queue.splice(0)) handle(msg);
 })();

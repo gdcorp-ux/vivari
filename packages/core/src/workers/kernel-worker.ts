@@ -53,6 +53,17 @@ async function safeMeasureMemory() {
 // in-RAM content footprint; the reply is matched back here by id.
 let memReqSeq = 1;
 const memPending = new Map();
+// Embedder requests forwarded to the File System Worker (vv-fs-expect, vv-fs-trace).
+let fsCallSeq = 1;
+const fsCallPending = new Map();
+function fsCall(type, extra) {
+  return new Promise((resolve, reject) => {
+    if (!fsWorkerRef) return reject(new Error("fs worker not ready"));
+    const id = fsCallSeq++;
+    fsCallPending.set(id, { resolve, reject });
+    fsWorkerRef.postMessage({ type, id, ...extra });
+  });
+}
 
 // Live Process Workers by PID, for the per-PID "Measure Memory" breakdown. Each
 // worker answers a `proc-mem` query with its own JS heap + module-cache stats;
@@ -1487,6 +1498,14 @@ async function boot() {
           total: event.data.total,
         });
       // Diagnostic VFS-memory reply (off the sync SAB path) — resolve its waiter.
+      else if (event.data.type === "fs-call-ok" || event.data.type === "fs-call-err") {
+        const p = fsCallPending.get(event.data.id);
+        if (p) {
+          fsCallPending.delete(event.data.id);
+          if (event.data.type === "fs-call-ok") p.resolve(event.data.result);
+          else p.reject(new Error(event.data.error));
+        }
+      } else if (event.data.type === "fs-hold") post("vv-fs-hold", { path: event.data.path });
       else if (event.data.type === "fs-mem") {
         const p = memPending.get(event.data.id);
         if (p) {
@@ -2992,6 +3011,19 @@ self.onmessage = async (event) => {
     } catch (err) {
       replyErr(m.reqId, err);
     }
+    return;
+  }
+
+  // Files a later vv-import-tree will deliver. Process requests touching one wait
+  // for it (each wait is announced as vv-fs-hold) instead of seeing ENOENT, so an
+  // embedder can start an app on part of a tree. `clear` drops every promise.
+  // vv-fs-trace {on} starts recording requested paths; {on:false} returns them.
+  if (m.type === "vv-fs-expect" || m.type === "vv-fs-trace") {
+    if (!kernel) { replyNotReady(m.reqId); return; }
+    const call = m.type === "vv-fs-expect"
+      ? fsCall("fs-expect", { paths: Array.isArray(m.paths) ? m.paths.map(String) : [], clear: !!m.clear })
+      : fsCall("fs-trace", { on: !!m.on });
+    call.then((result) => post("vv-reply", { reqId: m.reqId, ok: true, result }), (err) => replyErr(m.reqId, err));
     return;
   }
 

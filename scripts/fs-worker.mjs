@@ -17,6 +17,8 @@ const server = new FsServer(vfs);
 // so the kernel can free the scratch file. Kept in step so headless spikes exercise
 // the same body lifetime the browser does.
 server.onBodyConsumed = (path) => parentPort.postMessage({ type: "fetch-body-consumed", path });
+// Mirror of the browser fs-worker: announce a process parked on an expected file.
+server.onHold = (path) => parentPort.postMessage({ type: "fs-hold", path });
 
 // A vfs-bound facade for the dependency cache (mirror of buildAccess in the
 // browser fs-worker). Headless has no OPFS, so the snapshot store is an in-memory
@@ -81,6 +83,15 @@ parentPort.on("message", (msg) => {
       break;
     case "fs": // the kernel's own doorbell (processes use their MessagePort)
       server.service(msg.client);
+      break;
+    case "fs-expect":
+    case "fs-trace":
+      try {
+        const result = msg.type === "fs-expect" ? server.expect(msg.paths || [], !!msg.clear) : server.setTrace(!!msg.on);
+        parentPort.postMessage({ type: "fs-call-ok", id: msg.id, result });
+      } catch (err) {
+        parentPort.postMessage({ type: "fs-call-err", id: msg.id, error: String(err?.message || err) });
+      }
       break;
     case "fs-write-large":
       try {
