@@ -266,6 +266,7 @@ const SPIKES = [
   // VFS (it copies real trees), so needsWasm; the host half runs as a child process.
   { name: "fs-cp", file: "spike-fs-cp.mjs", net: false, needsWasm: true, timeout: 120000 },
   { name: "fs-errors", file: "spike-fs-errors.mjs", net: false, needsWasm: true, timeout: 120000 },
+  { name: "fs-expect", file: "spike-fs-expect.mjs", net: false, needsWasm: true, timeout: 120000 },
   // The HOST fs surface against the 1 MiB shared window: `fs.writeFile` and
   // `fs.readFile` hand over whole files, unlike a process's syscalls, which are
   // chunked to fit. Both directions used to fail at ~1 MiB, the write side

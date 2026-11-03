@@ -59,6 +59,20 @@ import {
 
 const EMPTY = new Uint8Array(0);
 
+// Which request fields are paths, per opcode (fd-based ops have none: an open fd
+// means the file already existed). SYMLINK's field 0 is the link's contents.
+const PATH_FIELDS = {
+  [OP_READ_FILE]: [0], [OP_WRITE_FILE]: [0], [OP_EXISTS]: [0], [OP_READDIR]: [0],
+  [OP_MKDIR]: [0], [OP_STAT]: [0], [OP_LSTAT]: [0], [OP_UNLINK]: [0], [OP_RMDIR]: [0],
+  [OP_RENAME]: [0, 1], [OP_SYMLINK]: [1], [OP_READLINK]: [0], [OP_LINK]: [0, 1],
+  [OP_OPEN]: [0], [OP_CHMOD]: [0], [OP_UTIMES]: [0], [OP_WATCH]: [1],
+};
+// Ops that read the path itself rather than what a trailing symlink points to.
+const NO_FOLLOW = new Set([OP_LSTAT, OP_READLINK, OP_UNLINK, OP_RENAME, OP_SYMLINK, OP_LINK]);
+const READS = new Set([OP_READ_FILE, OP_EXISTS, OP_READDIR, OP_STAT, OP_LSTAT, OP_READLINK, OP_OPEN, OP_WATCH]);
+// Ops that move or remove a directory along with whatever is still due inside it.
+const MOVES = new Set([OP_RENAME, OP_RMDIR]);
+
 // POSIX path helpers (the VFS speaks absolute POSIX paths). Kept local so the
 // server has no dependency on a path module.
 const basename = (p) => {
@@ -124,6 +138,130 @@ export class FsServer {
     // nothing, and a mutation under an unwatched top-level dir is ~O(1).
     this.watches = new Map();
     this.watchesByTop = new Map(); // top segment -> Map<key, watch>
+    // Files an embedder has promised a later batch write will deliver (expect()).
+    // A process request that touches one stays parked on its SAB until the file
+    // lands, instead of seeing ENOENT or an incomplete directory listing, so an
+    // app can start while the rest of its tree is still arriving. The kernel's
+    // own requests are never held: it delivers the batches.
+    this.expected = new Set(); // absolute file paths not yet written
+    this.expectedDirs = new Map(); // directory -> count of expected direct children
+    this.expectedTrees = new Map(); // directory -> count of expected files at any depth below it
+    this.held = new Map(); // clientId -> the expected path it is parked on
+    this.onHold = null; // optional (path) => void, so the embedder can send that file first
+    this.trace = null; // Set of every path requested while tracing (setTrace)
+  }
+
+  /**
+   * Promise `paths` (absolute files) will arrive by writeBatch/writeLarge; `clear`
+   * drops every promise. A path that already exists counts as delivered, so a
+   * batch that lands before its promise is not waited for forever.
+   */
+  expect(paths, clear = false) {
+    if (clear) {
+      this.expected.clear();
+      this.expectedDirs.clear();
+      this.expectedTrees.clear();
+    }
+    for (const path of paths) {
+      if (this.expected.has(path) || this.vfs.exists(path)) continue;
+      this.expected.add(path);
+      const dir = path.slice(0, path.lastIndexOf("/")) || "/";
+      this.expectedDirs.set(dir, (this.expectedDirs.get(dir) || 0) + 1);
+      this._countTree(path, 1);
+    }
+    this._release();
+    return this.expected.size;
+  }
+
+  /**
+   * Start (on) or stop recording requested paths; stopping returns them, sorted.
+   * A listed directory is recorded with a trailing "/" (its entries were needed).
+   */
+  setTrace(on) {
+    const paths = this.trace ? [...this.trace].sort() : [];
+    this.trace = on ? new Set() : null;
+    return paths;
+  }
+
+  _delivered(path) {
+    if (!this.expected.delete(path)) return;
+    const dir = path.slice(0, path.lastIndexOf("/")) || "/";
+    const left = this.expectedDirs.get(dir) - 1;
+    if (left > 0) this.expectedDirs.set(dir, left);
+    else this.expectedDirs.delete(dir);
+    this._countTree(path, -1);
+  }
+
+  // Add `by` to every ancestor directory of the expected file `path`.
+  _countTree(path, by) {
+    for (let at = path.lastIndexOf("/"); at > 0; at = path.lastIndexOf("/", at - 1)) {
+      const dir = path.slice(0, at), left = (this.expectedTrees.get(dir) || 0) + by;
+      if (left > 0) this.expectedTrees.set(dir, left);
+      else this.expectedTrees.delete(dir);
+    }
+  }
+
+  // Re-run parked requests; any still waiting on an expected path park again.
+  _release() {
+    if (!this.held.size) return;
+    const before = new Map(this.held);
+    this.held.clear();
+    for (const clientId of before.keys()) this.service(clientId, before.get(clientId));
+  }
+
+  // `path` with symlinks resolved (a trailing one only if `follow`), so a request
+  // through a link still finds an expected target. null on a loop.
+  _resolve(path, follow) {
+    let parts = path.split("/").filter(Boolean);
+    let current = "";
+    for (let i = 0, hops = 0; i < parts.length; i++) {
+      const next = current + "/" + parts[i];
+      if (parts[i] === "..") { current = current.slice(0, current.lastIndexOf("/")); continue; }
+      if (parts[i] === ".") continue;
+      if (i === parts.length - 1 && !follow) return next;
+      let kind;
+      try { kind = JSON.parse(this.vfs.lstat(next)).kind; } catch { return [next, ...parts.slice(i + 1)].join("/"); }
+      if (kind === "symlink") {
+        if (++hops > 40) return null;
+        const target = this.vfs.readlink(next);
+        parts = [...(target.startsWith("/") ? [] : current.split("/").filter(Boolean)), ...target.split("/").filter(Boolean), ...parts.slice(i + 1)];
+        current = "";
+        i = -1;
+      } else current = next;
+    }
+    return current || "/";
+  }
+
+  _expects(path, opcode) {
+    const due = (p) => this.expected.has(p) || (opcode === OP_READDIR && this.expectedDirs.has(p)) ||
+      (MOVES.has(opcode) && this.expectedTrees.has(p));
+    if (due(path)) return true;
+    const resolved = this._resolve(path, !NO_FOLLOW.has(opcode));
+    return resolved !== null && resolved !== path && due(resolved);
+  }
+
+  // Should this request wait for an expected file? Literal paths are checked up
+  // front. Symlinks are resolved only where it matters: for reads, after the VFS
+  // has already said ENOENT (or "no"); for mutations, before they could create or
+  // replace a file the batch would then overwrite.
+  _mustHold(opcode, fields, phase, error) {
+    const indexes = PATH_FIELDS[opcode];
+    if (!indexes) return null;
+    for (const i of indexes) {
+      const path = decodeBytes(fields[i]);
+      if (phase === "before") {
+        if (this.expected.has(path) || (opcode === OP_READDIR && this._expects(path, opcode))) return path;
+        // A writable open (O_CREAT/O_TRUNC/write access) mutates like a write.
+        const mutates = !READS.has(opcode) || (opcode === OP_OPEN && ((bytesToU32(fields[1]) & 0o3) !== 0 || (bytesToU32(fields[1]) & (O_CREAT | O_TRUNC)) !== 0));
+        if (mutates && this._expects(path, opcode)) return path;
+      } else if ((error === "ENOENT" || error === "ENOTDIR") && this._expects(path, opcode)) return path;
+    }
+    return null;
+  }
+
+  _hold(clientId, path, previous) {
+    this.held.set(clientId, path);
+    if (this.onHold && path !== previous) this.onHold(path);
   }
 
   // Could a mutation at `path` reach any watcher? Cheap gate for the exists()
@@ -151,6 +289,7 @@ export class FsServer {
 
   unregister(clientId) {
     this.clients.delete(clientId);
+    this.held.delete(clientId);
     // Drop any watches this client still held (its process is gone).
     if (this.watches.size) {
       for (const [key, w] of this.watches) {
@@ -219,14 +358,24 @@ export class FsServer {
   }
 
   /** Service one pending request sitting in the given client's SAB. */
-  service(clientId) {
+  service(clientId, heldOn = null) {
     const c = this.clients.get(clientId);
     if (!c) return;
     const { ctrl, data } = c;
     const opcode = Atomics.load(ctrl, I_OPCODE);
     const { flags, fields } = decodeRequest(data.slice(0, Atomics.load(ctrl, I_REQ_LEN)));
+    if (this.trace) for (const i of PATH_FIELDS[opcode] || []) this.trace.add(decodeBytes(fields[i]) + (opcode === OP_READDIR ? "/" : ""));
+    const holdable = this.expected.size > 0 && c.port !== null;
+    if (holdable) {
+      const path = this._mustHold(opcode, fields, "before");
+      if (path !== null) return this._hold(clientId, path, heldOn);
+    }
     try {
       const bytes = this.dispatch(opcode, flags, fields, clientId);
+      if (holdable && opcode === OP_EXISTS && bytes[0] === 0) {
+        const path = this._mustHold(opcode, fields, "after", "ENOENT");
+        if (path !== null) return this._hold(clientId, path, heldOn);
+      }
       if (bytes.length > data.length) {
         // The response doesn't fit the shared window (e.g. a whole-file read of a
         // >1 MiB file). Signal EFBIG so the client retries via the chunked fd path
@@ -245,6 +394,10 @@ export class FsServer {
       Atomics.store(ctrl, I_STATE, STATE_RESPONSE_OK);
       Atomics.notify(ctrl, I_STATE);
     } catch (err) {
+      if (holdable) {
+        const path = this._mustHold(opcode, fields, "after", typeof err === "string" ? err : err?.message);
+        if (path !== null) return this._hold(clientId, path, heldOn);
+      }
       const bytes = encodeString(typeof err === "string" ? err : String(err?.message || "EIO"));
       data.set(bytes, 0);
       Atomics.store(ctrl, I_RES_LEN, bytes.length);
@@ -265,6 +418,10 @@ export class FsServer {
     const p = this.persistence;
     if (p) p.onWrite(path);
     this.notifyWatch(path, existed ? "change" : "rename");
+    if (this.expected.size) {
+      this._delivered(path);
+      this._release();
+    }
   }
 
   /**
@@ -294,7 +451,9 @@ export class FsServer {
       this.vfs.write_file(e.path, bytes);
       if (p) p.onWrite(e.path);
       if (this.watches.size) this.notifyWatch(e.path, existed ? "change" : "rename");
+      if (this.expected.size) this._delivered(e.path);
     }
+    this._release();
     return entries.length;
   }
 
