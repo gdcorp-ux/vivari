@@ -215,6 +215,14 @@ only wired when `VV_DEBUG` is set, so non-debug runs never allocate it.
 
 ## 5. Filesystem
 
+Snapshot embedders can set `BootOptions.persist: false` to skip the OPFS project
+mirror's restore and write-behind work. The kernel passes this setting before the
+filesystem worker starts restoring; existing saved data and the independent
+dependency cache are left intact. Persistence remains enabled by default.
+`vv-import-tree` sends explicit directories with files in the existing
+`fs-write-batch` message. The filesystem worker creates both, including empty
+directories, without synchronous kernel-to-filesystem calls per directory.
+
 - **VFS core**: `packages/vfs/` is a Rust crate compiled to Wasm (`wasm-pack`,
   `web` + `nodejs` targets; crate `vivari-vfs`). It's an inode table (`HashMap<u64, Inode>`),
   directories map names→inode via `BTreeMap` (sorted readdir for free), symlinks

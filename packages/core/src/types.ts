@@ -19,6 +19,11 @@ export type DocumentIsolationPolicy = "isolate-and-require-corp" | "isolate-and-
 
 /** Options for {@link Vivari.boot}. */
 export interface BootOptions {
+  /** Disable the project OPFS mirror when the embedder restores its own saved
+   * tree on every boot. Existing mirrored data is left intact. Default: true.
+   * The independent lockfile-keyed dependency cache is unaffected.
+   */
+  persist?: boolean;
   /**
    * Whole-file lazy compression in the VFS. On by default — it cuts the file
    * system worker's memory footprint by ~70 % for a large `node_modules`. Set to

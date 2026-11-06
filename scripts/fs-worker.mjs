@@ -103,7 +103,7 @@ parentPort.on("message", (msg) => {
       break;
     case "fs-write-batch":
       try {
-        const n = server.writeBatch(msg.entries, msg.buffer);
+        const n = server.writeBatch(msg.entries, msg.buffer, msg.directories);
         parentPort.postMessage({ type: "fs-write-batch-ok", id: msg.id, count: n });
       } catch (err) {
         parentPort.postMessage({ type: "fs-write-batch-err", id: msg.id, error: String(err?.message || err) });

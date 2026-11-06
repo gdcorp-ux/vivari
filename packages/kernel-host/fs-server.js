@@ -433,10 +433,16 @@ export class FsServer {
    * parent dir once and write every file against the VFS on this thread, so the
    * cost is one message + one loop instead of N doorbell/Atomics.wait cycles.
    */
-  writeBatch(entries, buffer) {
+  writeBatch(entries, buffer, directories = []) {
     const view = new Uint8Array(buffer);
     const p = this.persistence;
     const madeDirs = new Set();
+    for (const dir of directories) {
+      this.vfs.mkdir(dir, true);
+      madeDirs.add(dir);
+      if (p) p.onWrite(dir);
+      if (this.watches.size) this.notifyWatch(dir, "rename");
+    }
     for (const e of entries) {
       const slash = e.path.lastIndexOf("/");
       if (slash > 0) {

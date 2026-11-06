@@ -328,6 +328,13 @@ README.md · roadmap.md · research.md · ARCHITECTURE.md · AGENTS.md
 
 ## Golden rules
 
+Snapshot mount performance: `vv-import-tree` must batch explicit directories with
+files through `writeFilesBatch(files, directories)`. Iterating `kernel.mkdirp`
+for ~10,700 folders adds seconds of synchronous worker crossings. Keep the
+browser and headless filesystem workers in step; `spike-batch-directories.mjs`
+exercises directory-only imports and error propagation. `BootOptions.persist`
+defaults true; false skips the project mirror without deleting saved data.
+
 1. **Cross-origin isolation is mandatory.** `SharedArrayBuffer`/`Atomics` need
    `COOP: same-origin` + `COEP: require-corp`. Studio sends them from
    `packages/studio/vite.config.ts` (`server.headers` + `preview.headers` + a plugin

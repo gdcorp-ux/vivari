@@ -1336,6 +1336,7 @@ let fsWorkerRef = null;
 // System Worker. On by default; a consumer sets it false only to trade memory
 // for a little less CPU.
 let vfsCompression = true;
+let vfsPersistence = true;
 // Optional network relay URL (BootOptions.netRelay), applied once the kernel exists.
 let netRelayUrl: string | null = null;
 
@@ -1481,7 +1482,7 @@ async function boot() {
   // Relay the compression gate now, before the FS worker's OPFS restore runs, so
   // it's in force as early as possible (the FS worker queues it until the VFS is
   // constructed). No-op on wasm builds that predate set_compression.
-  fsWorker.postMessage({ type: "fs-set-compression", on: vfsCompression });
+  fsWorker.postMessage({ type: "fs-set-compression", on: vfsCompression, persist: vfsPersistence });
   let onKernelFsMessage = () => {};
   let fsFailed = (_err) => {};
   const fsReady = new Promise((resolve, reject) => {
@@ -2628,6 +2629,7 @@ self.onmessage = async (event) => {
   if (m.type === "init") {
     // Default on: only an explicit `compress: false` (BootOptions.compress) disables it.
     vfsCompression = m.compress !== false;
+    vfsPersistence = m.persist !== false;
     netRelayUrl = typeof m.netRelay === "string" && m.netRelay ? m.netRelay : null;
     // `error` (not just `log`) so the SDK's boot() has something to reject on —
     // otherwise a kernel that dies here never posts `ready` and the caller waits
@@ -3033,17 +3035,13 @@ self.onmessage = async (event) => {
     if (!kernel) { replyNotReady(m.reqId); return; }
     try {
       const dir = String(m.dir || "").replace(/\/+$/, "");
-      if (dir) kernel.mkdirp(dir);
-      // Empty directories carry meaning in a mounted tree (and writeFilesBatch only
-      // creates the parents its files need), so materialise them explicitly first.
-      for (const d of Array.isArray(m.dirs) ? m.dirs : []) {
-        kernel.mkdirp(dir + "/" + String(d).replace(/^\/+/, ""));
-      }
+      const directories = [dir || "/", ...(Array.isArray(m.dirs) ? m.dirs : [])
+        .map(d => dir + "/" + String(d).replace(/^\/+/, ""))];
       const incoming = Array.isArray(m.files) ? m.files : [];
       const batch = incoming
         .filter((f) => f && typeof f.path === "string")
         .map((f) => ({ path: dir + "/" + String(f.path).replace(/^\/+/, ""), bytes: f.bytes ?? f.contents ?? "" }));
-      if (batch.length) await kernel.writeFilesBatch(batch);
+      await kernel.writeFilesBatch(batch, directories);
       post("vv-reply", { reqId: m.reqId, ok: true, count: batch.length });
       postFsChanged(dir || "/", "rename");
     } catch (err) {
