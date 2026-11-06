@@ -1,5 +1,14 @@
 # Vivari — Roadmap
 
+## Snapshot embedder startup (2026-11-05)
+
+Mounted empty directories now travel with files through the filesystem worker's
+batch path. The prior `vv-import-tree` loop performed one synchronous call for
+every folder, even though the SDK exposed a batched mount. Snapshot embedders
+can opt out of the redundant OPFS project mirror with `persist: false`; normal
+sessions retain persistence and no stored data is removed. The Playground keeps
+its own snapshot and exact-overlay caches.
+
 Built on the principle **de-risk the hardest part first**: prove the riskiest
 primitive (synchronous cross-thread access to a shared kernel) before expanding.
 

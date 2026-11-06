@@ -204,7 +204,7 @@ export function createKernelFs(fsWorker) {
   // concatenated into a single fresh ArrayBuffer, transferred once, and written
   // by the FS Worker's writeBatch() (which also mkdirp's parents). `files` is
   // `[{ path, bytes }]` (bytes: Uint8Array|Buffer|string). Returns a Promise.
-  function writeFilesBatch(files) {
+  function writeFilesBatch(files, directories = []) {
     let total = 0;
     const norm = files.map((f) => {
       const bytes = typeof f.contents === "string" || typeof f.bytes === "string"
@@ -227,7 +227,7 @@ export function createKernelFs(fsWorker) {
     return new Promise((resolve, reject) => {
       const id = seq++;
       pending.set(id, { resolve, reject });
-      fsWorker.postMessage({ type: "fs-write-batch", id, entries, buffer }, [buffer]);
+      fsWorker.postMessage({ type: "fs-write-batch", id, entries, buffer, directories }, [buffer]);
     });
   }
 

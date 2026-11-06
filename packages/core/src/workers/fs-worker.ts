@@ -30,6 +30,8 @@ let vfsRef = null; // the live VFS, set as soon as it's constructed (pre-restore
 let depCache = null; // lockfile-keyed node_modules snapshot cache (P1)
 let accessRef = null; // the vfs-bound facade, shared by persistence + dep cache
 let compressionOn = false; // whole-file lazy compression gate (URL ?compress=1)
+let persistenceOn = true, configured;
+const configuration = new Promise(resolve => { configured = resolve; });
 const queue = []; // messages that arrive before the VFS finishes booting
 
 // Apply the current compression gate to the VFS. Guarded so an older wasm build
@@ -65,7 +67,7 @@ function handle(msg) {
       break;
     case "fs-write-batch":
       try {
-        const n = server.writeBatch(msg.entries, msg.buffer);
+        const n = server.writeBatch(msg.entries, msg.buffer, msg.directories);
         post("fs-write-batch-ok", { id: msg.id, count: n });
       } catch (err) {
         post("fs-write-batch-err", { id: msg.id, error: String(err?.message || err) });
@@ -165,6 +167,8 @@ self.onmessage = (event) => {
   // OPFS restore, letting restored files compress on write.
   if (d && d.type === "fs-set-compression") {
     compressionOn = !!d.on;
+    persistenceOn = d.persist !== false;
+    configured();
     applyCompression();
     return;
   }
@@ -339,6 +343,7 @@ async function createOpfsDepStorage() {
   // Vite dev server and in the studio build.
   post("log", { line: "  [boot] initializing virtual file system…", cls: "muted" });
   await initKernel(new URL("../../../vfs/pkg/vivari_vfs_bg.wasm", import.meta.url));
+  await configuration;
   const vfs = new VirtualFileSystem();
   // Honor a compression flag that may have arrived before the VFS existed, so it
   // is in force before the OPFS restore below.
@@ -350,7 +355,7 @@ async function createOpfsDepStorage() {
   let persistence = null;
   accessRef = buildAccess(vfs);
   try {
-    if (typeof navigator !== "undefined" && navigator.storage && navigator.storage.getDirectory) {
+    if (persistenceOn && typeof navigator !== "undefined" && navigator.storage && navigator.storage.getDirectory) {
       persistence = await createOpfsPersistence({ access: accessRef, shouldPersist });
       // Restoring a saved project (esp. its node_modules) can take a while — the
       // VFS is re-hydrated entry-by-entry. Report progress so the user knows the
