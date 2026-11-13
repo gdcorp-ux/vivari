@@ -1597,6 +1597,16 @@ throw that gets swallowed. Rules:
   syscall field.
 - Large **files** transfer in `FD_CHUNK` (512 KiB) pieces via the fd loop in
   `lib/fs.js`; `writeLarge` uses a transferred `ArrayBuffer` instead.
+- The `copyFile` binding must also use bounded fd reads/writes, including short
+  writes and `finally` closes. Reading then writing a whole file there bypasses
+  lib/fs.js's chunking and breaks `copyFileSync`, callback/promises copies and
+  recursive `cpSync` at 1 MiB. Compare open descriptors' inodes before truncating
+  an overwrite, so copying onto the same file or an alias cannot erase it.
+  On failure, close both fds and attempt to unlink only a target this call
+  created or truncated; retain the original error if cleanup also fails.
+  `COPYFILE_FICLONE` permits byte-copy fallback; `COPYFILE_FICLONE_FORCE` must
+  report `ENOSYS` because the VFS has no reflink operation.
+  Gated by `spike-fs-copyfile` (also selected in the Wasm CI tier).
 - Whole-file work on the **host** side is size-independent in `kernel-fs.js`, not
   at its call sites. `readFile`/`readFileBytes` take the `EFBIG` from
   `FsServer.service()` as "retry unbounded" and slice the file over the same fd

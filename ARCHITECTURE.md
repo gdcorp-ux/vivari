@@ -152,6 +152,16 @@ repeatedly:
 - **Large file I/O is chunked.** `FD_CHUNK = 512 KiB`; `fs.js` loops on short
   reads/writes, so an arbitrarily large file transfers in pieces. `writeLarge`
   bypasses the SAB entirely via a transferred `ArrayBuffer`.
+  The native `copyFile` binding uses the same bounded fd operations for sync,
+  callback and promise copies (including recursive `cpSync`). It opens the source
+  first, refuses directories, uses `O_EXCL` when requested, compares descriptor
+  inodes before truncation, copies source permissions, and attempts both fd
+  closes. Failed copies attempt to unlink destinations this call created or
+  truncated, preserving the original error even if cleanup fails. Existing
+  same-file aliases are never truncated or removed. `COPYFILE_FICLONE` falls
+  back to copying; `COPYFILE_FICLONE_FORCE` fails with `ENOSYS` before opening
+  the destination because the VFS has no reflink operation. No whole-file
+  payload crosses the bridge during a copy.
 - **The HOST takes the same fd loop, one layer lower.** The kernel's own fs
   client (`kernel-fs.js`) reads and writes whole files for the SDK, the studio's
   binary import, and its own bulk walkers — export, recursive copy, search, the

@@ -3,6 +3,15 @@
 From 1.1.0 on, entries are generated from [changesets](https://github.com/changesets/changesets).
 `@vivari/core` and `@vivari/react` are released together under the same version.
 
+## 1.1.3-gdux.6
+
+### Patch Changes
+
+- Copy large files in bounded descriptor chunks so copyFileSync, callback/promise
+  copies and recursive cpSync can copy files larger than the shared bridge window.
+  Handle short writes, close descriptors on failure, preserve source permissions,
+  and protect same-file aliases before overwriting.
+
 ## 1.1.3-gdux.1
 
 ### Patch Changes
