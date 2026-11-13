@@ -274,6 +274,7 @@ const SPIKES = [
   // silently. Drives the real SDK + the real kernel worker through the headless
   // twin (scripts/kernel-worker.mjs), so needsWasm.
   { name: "large-fs-payloads", file: "spike-large-fs-payloads.mjs", net: false, needsWasm: true, timeout: 120000 },
+  { name: "fs-copyfile", file: "spike-fs-copyfile.mjs", net: false, needsWasm: true, timeout: 60000 },
   { name: "worker-pool", file: "spike-worker-pool.mjs", net: false, needsWasm: true, timeout: 120000 },
   { name: "node-cli", file: "spike-node-cli.mjs", net: false, needsWasm: true, timeout: 120000 },
   // The interactive prompts. Slower than its assertion count suggests: a REPL is

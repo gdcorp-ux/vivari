@@ -1,5 +1,17 @@
 # Vivari — Roadmap
 
+## Large runtime file copies (2026-11-12)
+
+`copyFile` used whole-file bridge reads and writes, bypassing lib/fs.js's fd
+chunking. Copies at or above 1 MiB failed, including recursive `cpSync` of
+Monaco workers during Airo App Builder's closeBundle step. The shared binding
+now copies in at most 512 KiB pieces, handles short writes, and closes both
+descriptors on success or failure. Source permissions, exclusive creates,
+overwrite truncation, same-file aliases and filesystem errors are covered by
+the offline `fs-copyfile` spike alongside 0 B, 1 MiB, 1 MiB+1 and ~6 MiB copies
+through sync, callback and promise APIs. Delivery is a local Changesets
+`1.1.3-gdux.6` build for Playground vendoring; no npm publication is needed.
+
 ## Snapshot embedder startup (2026-11-05)
 
 Mounted empty directories now travel with files through the filesystem worker's

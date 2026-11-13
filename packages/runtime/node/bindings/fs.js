@@ -32,6 +32,7 @@ const UV_DIRENT_LINK = 3;
 
 // COPYFILE_EXCL bit.
 const COPYFILE_EXCL = 1;
+const FD_CHUNK = 512 * 1024;
 
 // access(2) mode bit — must match internalBinding('constants').fs.X_OK.
 const X_OK = 1;
@@ -603,8 +604,34 @@ export function createFsBinding({ sys: rawSys, process }) {
     copyFile(src, dest, mode, ...rest) {
       const req = findReq(rest);
       return dispatch(req, () => {
-        if (mode & COPYFILE_EXCL && sys.exists(dest)) throw vvError("EEXIST", "copyfile", dest);
-        sys.writeFile(dest, sys.readFile(src));
+        const source = sys.open(src, 0 /* O_RDONLY */, 0);
+        try {
+          const st = sys.fstat(source);
+          if (st.kind === "dir") throw vvError("EISDIR", "copyfile", src, dest);
+          // Open without truncation: aliases (including hard links and symlinks)
+          // must be compared by inode before an overwrite can erase the source.
+          const flags = 1 | 0o100 | (mode & COPYFILE_EXCL ? 0o200 : 0);
+          const target = sys.open(dest, flags /* O_WRONLY | O_CREAT [| O_EXCL] */, st.mode);
+          try {
+            if (sys.fstat(target).ino === st.ino) return;
+            sys.ftruncate(target, 0);
+            acceptIfUnsupported(() => sys.fchmod(target, st.mode));
+            for (;;) {
+              const chunk = sys.fdRead(source, FD_CHUNK, -1);
+              if (chunk.length === 0) break;
+              let offset = 0;
+              while (offset < chunk.length) {
+                const written = sys.fdWrite(target, chunk.subarray(offset), -1);
+                if (written <= 0) throw vvError("EIO", "copyfile", src, dest);
+                offset += written;
+              }
+            }
+          } finally {
+            sys.close(target);
+          }
+        } finally {
+          sys.close(source);
+        }
       });
     },
     // ---- metadata writes ----
