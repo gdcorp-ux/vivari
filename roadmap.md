@@ -12,6 +12,16 @@ the offline `fs-copyfile` spike alongside 0 B, 1 MiB, 1 MiB+1 and ~6 MiB copies
 through sync, callback and promise APIs. Delivery is a local Changesets
 `1.1.3-gdux.6` build for Playground vendoring; no npm publication is needed.
 
+Review follow-up: failed reads, writes and permission changes now close both
+descriptors and attempt to remove incomplete destinations. An exclusive-create
+probe distinguishes newly created targets from existing paths; existing paths
+become eligible for removal only after truncation, protecting same-file aliases
+even when stat or close fails. Cleanup cannot replace the original error.
+Forced reflinks fail with `ENOSYS` before touching the destination; optional
+reflinks retain their byte-copy fallback. The spike injects failures and covers
+both flags through sync, callback and promise APIs. The unpublished local
+delivery remains `1.1.3-gdux.6`.
+
 ## Snapshot embedder startup (2026-11-05)
 
 Mounted empty directories now travel with files through the filesystem worker's

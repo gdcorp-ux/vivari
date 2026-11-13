@@ -8,40 +8,86 @@ const hardStop = setTimeout(() => process.exit(124), 60_000);
 
 // Force short reads AND writes, and forbid whole-file transfers. Track every
 // descriptor so success, failed opens, reads, writes and closes prove cleanup.
-function exercise(failure) {
+function exercise(failure, { existing = false, sameFile = false, cleanupFailure = false, mode = 0 } = {}) {
   const bytes = Uint8Array.from({ length: 29 }, (_, i) => i * 7);
   const copied = [];
   const closed = [];
+  const unlinked = [];
+  let destinationExists = existing;
+  let truncated = false;
   let readOffset = 0;
-  const boom = () => { throw Object.assign(new Error("EIO"), { code: "EIO" }); };
+  const destination = sameFile === "path" ? "/src" : "/dest";
+  // Already-labelled errors retain identity, proving cleanup cannot replace
+  // the actual copy failure with its own close/unlink error.
+  const original = Object.assign(new Error("injected copy failure"), { code: "EIO", syscall: "copyfile" });
+  const cleanup = Object.assign(new Error("injected cleanup failure"), { code: "ENOSPC" });
+  const boom = () => { throw original; };
   const binding = createFsBinding({ process: { cwd: () => "/", nextTick: queueMicrotask }, sys: {
-    open(path) { if (path === "/dest" && failure === "open") boom(); return path === "/src" ? 0 : 1; },
-    fstat(fd) { return { kind: "file", ino: fd + 1, mode: 0o751 }; },
-    ftruncate() {}, fchmod() {},
+    open(path, flags) {
+      if (flags === 0) return 0;
+      assert.equal(path, destination);
+      if (failure === "open") boom();
+      if (destinationExists && (flags & 0o200)) throw Object.assign(new Error("EEXIST"), { code: "EEXIST" });
+      assert.ok(destinationExists || (flags & 0o100), "creation requires O_CREAT");
+      destinationExists = true;
+      return 1;
+    },
+    fstat(fd) {
+      if (fd === 1 && failure === "stat") boom();
+      return { kind: "file", ino: sameFile ? 1 : fd + 1, mode: 0o751 };
+    },
+    ftruncate() { assert.equal(!!sameFile, false, "never truncate the source"); if (failure === "truncate") boom(); truncated = true; },
+    fchmod() { if (failure === "chmod") boom(); },
     fdRead(fd, length) {
       assert.ok(length <= 512 * 1024);
-      if (failure === "read") boom();
+      if (failure === "read" && readOffset > 0) boom();
       const chunk = bytes.slice(readOffset, readOffset + Math.min(length, 7));
       readOffset += chunk.length;
       return chunk;
     },
     fdWrite(fd, chunk) {
       assert.ok(chunk.length <= 512 * 1024);
-      if (failure === "write") boom();
+      if (failure === "write" && copied.length > 0) boom();
       if (failure === "zero-write") return 0;
       copied.push(...chunk.subarray(0, 3));
       return Math.min(3, chunk.length);
     },
-    close(fd) { closed.push(fd); if (failure === "close" && fd === 1) boom(); },
+    close(fd) {
+      closed.push(fd);
+      if (failure === "close" && fd === 1) boom();
+      if (cleanupFailure) throw cleanup;
+    },
+    unlink(path) {
+      assert.deepEqual(closed, [1, 0], "close both descriptors before unlinking");
+      unlinked.push(path);
+      if (cleanupFailure) throw cleanup;
+      destinationExists = false;
+    },
     readFile() { assert.fail("whole-file read"); },
     writeFile() { assert.fail("whole-file write"); },
   } });
-  if (failure) assert.throws(() => binding.copyFile("/src", "/dest", 0), { code: "EIO" });
-  else { binding.copyFile("/src", "/dest", 0); assert.deepEqual(copied, [...bytes]); }
+  if (failure) assert.throws(() => binding.copyFile("/src", destination, mode), e =>
+    failure === "zero-write" ? e.code === "EIO" && e.syscall === "copyfile" : e === original);
+  else {
+    binding.copyFile("/src", destination, mode);
+    assert.deepEqual(copied, sameFile ? [] : [...bytes]);
+  }
   assert.deepEqual(closed, failure === "open" ? [0] : [1, 0]);
+  const removeDestination = !!failure && failure !== "open" && (!existing || truncated);
+  assert.deepEqual(unlinked, removeDestination ? ["/dest"] : []);
+  assert.equal(destinationExists, removeDestination && !cleanupFailure ? false : existing || failure !== "open");
 }
-for (const failure of [undefined, "open", "read", "write", "zero-write", "close"]) exercise(failure);
-console.log("  ✓ bounded short I/O, zero-progress failure, and descriptor cleanup");
+for (const existing of [false, true]) {
+  for (const failure of [undefined, "open", "stat", "truncate", "chmod", "read", "write", "zero-write", "close"])
+    exercise(failure, { existing });
+  for (const failure of ["chmod", "read", "write", "zero-write"])
+    exercise(failure, { existing, cleanupFailure: true });
+}
+for (const sameFile of ["path", "alias"])
+  for (const failure of [undefined, "stat", "close"])
+    exercise(failure, { existing: true, sameFile });
+exercise(undefined, { mode: 2 /* COPYFILE_FICLONE: byte-copy fallback */ });
+console.log("  ✓ bounded short I/O, failed-copy unlink, original errors, descriptor cleanup and source protection");
 
 const GUEST = String.raw`
 const fs = require('fs');
@@ -93,6 +139,25 @@ const assert = require('assert/strict');
       console.log('PASS ' + name + ' ' + size);
     }
   }
+  for (const [name, copy] of Object.entries(copies)) {
+    const src = '/copy/src/nested/1048577';
+    const bytes = fs.readFileSync(src);
+    const dest = '/copy/' + name + '-clone';
+    await copy(src, dest, fs.constants.COPYFILE_FICLONE);
+    assert.deepEqual(fs.readFileSync(dest), bytes);
+    const prior = Buffer.from('keep destination on unsupported clone');
+    fs.writeFileSync(dest, prior);
+    for (const flags of [fs.constants.COPYFILE_FICLONE_FORCE,
+      fs.constants.COPYFILE_FICLONE | fs.constants.COPYFILE_FICLONE_FORCE]) {
+      await assert.rejects(async () => copy(src, dest, flags), {code:'ENOSYS',syscall:'copyfile',path:src,dest});
+      assert.deepEqual(fs.readFileSync(dest), prior);
+      await assert.rejects(async () => copy(src, dest + '-new', flags), {code:'ENOSYS'});
+      assert.equal(fs.existsSync(dest + '-new'), false);
+      await assert.rejects(async () => copy(src, src, flags), {code:'ENOSYS'});
+      assert.deepEqual(fs.readFileSync(src), bytes);
+    }
+    console.log('PASS clone ' + name);
+  }
   fs.cpSync('/copy/src', '/copy/tree', {recursive:true});
   for (const name of fs.readdirSync('/copy/src/nested'))
     assert.deepEqual(fs.readFileSync('/copy/tree/nested/' + name), fs.readFileSync('/copy/src/nested/' + name));
@@ -105,9 +170,9 @@ try {
   writeProject(h.kernel, "/copy-test", { "guest.cjs": GUEST });
   const result = await h.kernel.start("node", ["/copy-test/guest.cjs"], { cwd: "/copy-test", capture: true });
   assert.equal(result.code, 0, result.stderr);
-  assert.equal((result.stdout.match(/^PASS /gm) || []).length, 13, result.stdout + result.stderr);
+  assert.equal((result.stdout.match(/^PASS /gm) || []).length, 16, result.stdout + result.stderr);
   console.log(result.stdout.trim());
-  console.log("  ✓ sync/callback/promises: empty and large binary copies, overwrite, mode, EXCL, errors, aliases and recursive cp");
+  console.log("  ✓ sync/callback/promises: empty and large binary copies, overwrite, mode, EXCL, errors, aliases, clone flags and recursive cp");
   clearTimeout(hardStop);
   process.exit(0);
 } catch (e) {

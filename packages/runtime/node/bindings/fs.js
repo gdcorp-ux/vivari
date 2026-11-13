@@ -30,8 +30,9 @@ const UV_DIRENT_FILE = 1;
 const UV_DIRENT_DIR = 2;
 const UV_DIRENT_LINK = 3;
 
-// COPYFILE_EXCL bit.
+// copyFile flags — must match internalBinding('constants').fs.
 const COPYFILE_EXCL = 1;
+const COPYFILE_FICLONE_FORCE = 4;
 const FD_CHUNK = 512 * 1024;
 
 // access(2) mode bit — must match internalBinding('constants').fs.X_OK.
@@ -605,16 +606,29 @@ export function createFsBinding({ sys: rawSys, process }) {
       const req = findReq(rest);
       return dispatch(req, () => {
         const source = sys.open(src, 0 /* O_RDONLY */, 0);
+        let target;
+        let removeTarget = false;
+        let error;
         try {
           const st = sys.fstat(source);
           if (st.kind === "dir") throw vvError("EISDIR", "copyfile", src, dest);
+          // This VFS has no reflink operation. FICLONE permits a byte-copy
+          // fallback, but FORCE must fail before creating/changing a target.
+          if (mode & COPYFILE_FICLONE_FORCE) throw vvError("ENOSYS", "copyfile", src, dest);
           // Open without truncation: aliases (including hard links and symlinks)
           // must be compared by inode before an overwrite can erase the source.
-          const flags = 1 | 0o100 | (mode & COPYFILE_EXCL ? 0o200 : 0);
-          const target = sys.open(dest, flags /* O_WRONLY | O_CREAT [| O_EXCL] */, st.mode);
+          // Try an exclusive create first so cleanup knows whether THIS call
+          // created the path, even if fstat fails before we can compare inodes.
           try {
-            if (sys.fstat(target).ino === st.ino) return;
+            target = sys.open(dest, 1 | 0o100 | 0o200 /* O_WRONLY | O_CREAT | O_EXCL */, st.mode);
+            removeTarget = true;
+          } catch (e) {
+            if (mode & COPYFILE_EXCL || e.code !== "EEXIST") throw e;
+            target = sys.open(dest, 1 /* O_WRONLY */, st.mode);
+          }
+          if (sys.fstat(target).ino !== st.ino) {
             sys.ftruncate(target, 0);
+            removeTarget = true;
             acceptIfUnsupported(() => sys.fchmod(target, st.mode));
             for (;;) {
               const chunk = sys.fdRead(source, FD_CHUNK, -1);
@@ -626,11 +640,21 @@ export function createFsBinding({ sys: rawSys, process }) {
                 offset += written;
               }
             }
-          } finally {
-            sys.close(target);
           }
-        } finally {
-          sys.close(source);
+        } catch (e) {
+          error = e;
+        }
+        // Attempt both closes before unlinking, and keep the first failure:
+        // cleanup errors must never mask the read/write/metadata error.
+        for (const fd of [target, source]) {
+          if (fd === undefined) continue;
+          try { sys.close(fd); } catch (e) { error ??= e; }
+        }
+        if (error) {
+          if (removeTarget) {
+            try { sys.unlink(dest); } catch {}
+          }
+          throw error;
         }
       });
     },
